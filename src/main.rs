@@ -2,8 +2,11 @@
 
 mod app;
 mod catalog;
+mod catalog_en;
 mod git;
 mod graph;
+mod i18n;
+mod icons;
 mod theme;
 
 use std::path::PathBuf;
@@ -22,7 +25,7 @@ fn main() -> eframe::Result<()> {
     }
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
-        .with_title("YAGUI – Git einfach sichtbar")
+        .with_title("YAGUI")
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([900.0, 560.0]);
     if screenshot.is_some() {

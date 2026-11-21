@@ -167,11 +167,11 @@ pub fn build_args(cmd: &Cmd, values: &[Value], extra: &str) -> Vec<Arg> {
     let mut out = Vec::new();
     for (i, part) in split_args(cmd.base).into_iter().enumerate() {
         let help = if i == 0 {
-            format!("Git-Befehl „{}“: {}", part, cmd.title)
+            crate::i18n::trs(format!("git {}: {}", part, tc(cmd.title)), format!("Git-Befehl „{}“: {}", part, cmd.title))
         } else if part.starts_with('-') {
-            format!("Fest eingestellte Option dieses Befehls ({})", cmd.title)
+            crate::i18n::trs(format!("Fixed option of {}", tc(cmd.title)), format!("Fest eingestellte Option ({})", cmd.title))
         } else {
-            format!("Unterbefehl „{part}“")
+            crate::i18n::trs(format!("Subcommand \"{part}\""), format!("Unterbefehl „{part}“"))
         };
         out.push(Arg { text: part, help });
     }
@@ -182,7 +182,7 @@ pub fn build_args(cmd: &Cmd, values: &[Value], extra: &str) -> Vec<Arg> {
                 if t.is_empty() {
                     continue;
                 }
-                let help = if help.is_empty() { label.to_string() } else { format!("{label}: {help}") };
+                let help = if help.is_empty() { tc(label).to_string() } else { format!("{}: {}", tc(label), tc(help)) };
                 let vals = if *multi { split_args(t) } else { vec![t.to_string()] };
                 if prefix.ends_with('=') || prefix.ends_with('.') {
                     for v in vals {
@@ -198,7 +198,7 @@ pub fn build_args(cmd: &Cmd, values: &[Value], extra: &str) -> Vec<Arg> {
                 }
             }
             (P::Flag { args, label, help, .. }, Value::Bool(true)) => {
-                let h = if help.is_empty() { label.to_string() } else { format!("{label}: {help}") };
+                let h = if help.is_empty() { tc(label).to_string() } else { format!("{}: {}", tc(label), tc(help)) };
                 for a in split_args(args) {
                     out.push(Arg { text: a, help: h.clone() });
                 }
@@ -206,20 +206,20 @@ pub fn build_args(cmd: &Cmd, values: &[Value], extra: &str) -> Vec<Arg> {
             (P::Choice { label, options, .. }, Value::Choice(c)) => {
                 if let Some((args, olabel, ohelp)) = options.get(*c) {
                     for a in split_args(args) {
-                        out.push(Arg { text: a, help: format!("{label}: {olabel} – {ohelp}") });
+                        out.push(Arg { text: a, help: format!("{}: {} – {}", tc(label), tc(olabel), tc(ohelp)) });
                     }
                 }
             }
             (P::Lit(a, help), _) => {
                 for x in split_args(a) {
-                    out.push(Arg { text: x, help: help.to_string() });
+                    out.push(Arg { text: x, help: tc(help).to_string() });
                 }
             }
             _ => {}
         }
     }
     for a in split_args(extra) {
-        out.push(Arg { text: a, help: "Zusätzliche Option, die du selbst eingetragen hast".into() });
+        out.push(Arg { text: a, help: crate::i18n::tr("Extra option you entered", "Zusätzliche Option, die du selbst eingetragen hast").into() });
     }
     out
 }
@@ -460,6 +460,7 @@ impl CmdExt for Cmd {
 }
 
 use Danger::{Change as C, Read as R, Risky as X};
+use crate::i18n::c as tc;
 
 pub fn all() -> Vec<Cmd> {
     let mut l: Vec<Cmd> = Vec::new();
@@ -694,7 +695,7 @@ pub fn all() -> Vec<Cmd> {
     l.push(c("push", Cat::Remote, "Commits hochladen (push)", "push", C,
         "Lädt deine neuen Commits auf den Server hoch, damit andere sie sehen.",
         vec![f("-u", "Upstream setzen", "verbindet den Branch dauerhaft mit dem Server-Branch"),
-             ch("force", "Überschreiben", FORCE_MODES), f("--tags", "Alle Tags mit hochladen", ""),
+             ch("force", "Erzwingen (Force)", FORCE_MODES), f("--tags", "Alle Tags mit hochladen", ""),
              f("--follow-tags", "Passende Tags mit hochladen", "nur annotierte Tags der gepushten Commits"),
              f("--all", "Alle Branches", ""), f("--no-verify", "Hooks überspringen", ""), f("--dry-run", "Nur testen", ""),
              o("remote", "Remote", "origin", "zu welchem Server"), o("branch", "Branch", "leer = aktueller", "welcher Branch (oder lokal:server)")]));
