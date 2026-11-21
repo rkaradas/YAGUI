@@ -3,6 +3,7 @@
 
 mod auth;
 mod dialogs;
+mod tree;
 mod ui;
 
 use std::path::{Path, PathBuf};
@@ -325,6 +326,8 @@ struct Saved {
     accounts: Vec<auth::Account>,
     #[serde(default)]
     extra_keys: Vec<String>,
+    #[serde(default)]
+    flat_files: bool,
 }
 
 pub struct App {
@@ -362,6 +365,8 @@ pub struct App {
     editors: Vec<auth::Editor>,
     extra_keys: Vec<PathBuf>,
     accounts: Vec<auth::Account>,
+    /// Show changed files as a plain list instead of a folder tree.
+    flat_files: bool,
 }
 
 /// How often the .git files are checked for changes.
@@ -420,6 +425,7 @@ impl App {
             editors: auth::detect_editors(),
             extra_keys: saved.extra_keys.iter().map(PathBuf::from).collect(),
             accounts: saved.accounts.clone(),
+            flat_files: saved.flat_files,
         };
         let cwd_repo = std::env::current_dir().ok().and_then(|d| git::find_toplevel(&d));
         if let Some(r) = repo.and_then(|r| git::find_toplevel(&r)) {
@@ -484,6 +490,7 @@ impl App {
             shell: self.shell,
             accounts: self.accounts.clone(),
             extra_keys: self.extra_keys.iter().map(|p| p.display().to_string()).collect(),
+            flat_files: self.flat_files,
         };
         if let Some(p) = state_file() {
             let _ = std::fs::create_dir_all(p.parent().unwrap());

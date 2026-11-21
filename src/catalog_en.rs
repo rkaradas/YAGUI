@@ -1108,4 +1108,7 @@ pub static EN: &[(&str, &str)] = &[
     ("Übernimmt ein GNU-Arch-Archiv.", "Imports a GNU Arch archive."),
     ("Beliebiger Git-Befehl", "Any Git command"),
     ("Gib selbst einen Git-Befehl ein (ohne „git“ davor). So ist wirklich jeder Befehl mit jeder Option erreichbar.", "Type any Git command yourself (without \"git\"). Every command and option is reachable this way."),
+    ("Nur diese Dateien", "Only these files"),
+    ("leer = alles Vorgemerkte", "empty = everything staged"),
+    ("committet nur diese Dateien oder Ordner (bekannte Dateien, auch wenn nicht vorgemerkt)", "commits only these files or folders (tracked files, even if not staged)"),
 ];

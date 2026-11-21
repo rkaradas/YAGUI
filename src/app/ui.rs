@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Align, Align2, Color32, FontId, Id, Layout, RichText, Sense, Stroke, Vec2};
 
+use super::tree::{self, Row};
 use super::{Act, App, DetailTab, Repo, View};
 use crate::catalog::{self, CATS};
 use crate::git::{self, FileStatus, JobState};
@@ -990,12 +991,14 @@ impl App {
     pub(super) fn changes_view(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>, ctx: &egui::Context) {
         let mut hunk: Option<(String, bool, bool)> = None;
         let mut do_commit = false;
+        let mut flat = self.flat_files;
         {
             let cmds = &self.cmds;
             let r = &mut self.tabs[self.active];
             let unstaged: Vec<FileStatus> = r.status.iter().filter(|f| f.unstaged()).cloned().collect();
             let staged: Vec<FileStatus> = r.status.iter().filter(|f| f.staged()).cloned().collect();
             let has_head = !r.commits.is_empty();
+            let root = r.path.clone();
 
             egui::Panel::left("changes_files").resizable(true).default_size(380.0).min_size(280.0).frame(egui::Frame::new().fill(theme::PANEL).inner_margin(0)).show(ui, |ui| {
                 // Commit composer at the bottom
@@ -1030,17 +1033,40 @@ impl App {
                     ui.label(RichText::new(preview).monospace().size(10.5).color(theme::TEXT_FAINT));
                 });
 
+                // Tree / list switch.
+                egui::Frame::new().inner_margin(egui::Margin { left: 12, right: 8, top: 6, bottom: 2 }).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(tr("Show as", "Anzeigen als")).size(11.5).color(theme::TEXT_FAINT));
+                        if ui.selectable_label(!flat, RichText::new(tr("Tree", "Baum")).size(11.5)).on_hover_text(tr("Files grouped by folder; act on a whole folder", "Dateien nach Ordnern; Aktionen für ganze Ordner")).clicked() {
+                            flat = false;
+                        }
+                        if ui.selectable_label(flat, RichText::new(tr("List", "Liste")).size(11.5)).on_hover_text(tr("All files in one list", "Alle Dateien in einer Liste")).clicked() {
+                            flat = true;
+                        }
+                        if !flat {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let all: Vec<&str> = r.status.iter().map(|f| f.path.as_str()).collect();
+                                if ui.add(egui::Button::new(RichText::new(tr("Collapse all", "Alle zuklappen")).size(11.0).color(theme::TEXT_DIM)).frame(false)).clicked() {
+                                    tree::set_all(ui.ctx(), "unstaged", &all, false);
+                                    tree::set_all(ui.ctx(), "staged", &all, false);
+                                }
+                                if ui.add(egui::Button::new(RichText::new(tr("Expand all", "Alle aufklappen")).size(11.0).color(theme::TEXT_DIM)).frame(false)).clicked() {
+                                    tree::set_all(ui.ctx(), "unstaged", &all, true);
+                                    tree::set_all(ui.ctx(), "staged", &all, true);
+                                }
+                            });
+                        }
+                    });
+                });
                 egui::ScrollArea::vertical().id_salt("files").auto_shrink([false; 2]).show(ui, |ui| {
-                    ui.add_space(6.0);
+                    ui.add_space(4.0);
                     file_section_header(ui, tr("Unstaged", "Nicht vorgemerkt"), unstaged.len(), if unstaged.is_empty() { None } else { Some((tr("Stage All", "Alle vormerken"), "git add -A")) }, || {
                         acts.push(Act::Quick { title: tr("Stage all", "Alles vormerken").into(), args: vec!["add".into(), "-A".into()], explain: String::new() });
                     });
                     if unstaged.is_empty() {
                         empty_hint(ui, tr("No changes", "Keine Änderungen"));
                     }
-                    for f in &unstaged {
-                        file_row(ui, cmds, acts, f, false, r.sel_file.as_ref() == Some(&(f.path.clone(), false)), has_head);
-                    }
+                    file_list(ui, cmds, acts, &unstaged, false, r.sel_file.as_ref(), has_head, flat, &root);
                     ui.add_space(10.0);
                     let unstage_args: Vec<String> = if has_head { vec!["reset".into(), "-q".into()] } else { vec!["rm".into(), "--cached".into(), "-r".into(), "-q".into(), ".".into()] };
                     file_section_header(ui, tr("Staged", "Vorgemerkt"), staged.len(), if staged.is_empty() { None } else { Some((tr("Unstage All", "Alle zurücknehmen"), "git reset")) }, || {
@@ -1049,9 +1075,7 @@ impl App {
                     if staged.is_empty() {
                         empty_hint(ui, tr("Nothing staged yet", "Noch nichts vorgemerkt"));
                     }
-                    for f in &staged {
-                        file_row(ui, cmds, acts, f, true, r.sel_file.as_ref() == Some(&(f.path.clone(), true)), has_head);
-                    }
+                    file_list(ui, cmds, acts, &staged, true, r.sel_file.as_ref(), has_head, flat, &root);
                 });
             });
 
@@ -1123,6 +1147,10 @@ impl App {
                     }
                 });
             });
+        }
+        if flat != self.flat_files {
+            self.flat_files = flat;
+            self.save();
         }
         if let Some((patch, reverse, cached)) = hunk {
             let mut args = vec!["apply".to_string()];
@@ -1282,7 +1310,105 @@ fn file_section_header(ui: &mut egui::Ui, title: &str, count: usize, action: Opt
     ui.add_space(2.0);
 }
 
-fn file_row(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, f: &FileStatus, staged: bool, selected: bool, has_head: bool) {
+/// The changed files of one section (unstaged or staged), as a folder tree or a flat list.
+/// Folders can be staged, unstaged, stashed or discarded as a whole.
+#[allow(clippy::too_many_arguments)]
+fn file_list(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, files: &[FileStatus], staged: bool, sel: Option<&(String, bool)>, has_head: bool, flat: bool, root: &std::path::Path) {
+    let is_sel = |f: &FileStatus| sel.map(|(p, s)| *p == f.path && *s == staged).unwrap_or(false);
+    if flat {
+        for f in files {
+            file_row(ui, cmds, acts, f, staged, is_sel(f), has_head, 0.0, true);
+        }
+        return;
+    }
+    let salt = if staged { "staged" } else { "unstaged" };
+    let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    let ctx = ui.ctx().clone();
+    for row in tree::rows(&ctx, salt, &paths, true) {
+        match row {
+            Row::Dir { path, label, depth, count, open } => {
+                let (resp, action) = tree::dir_row(ui, &label, depth, count, open, Some(if staged { Icon::Close } else { Icon::Plus }));
+                let dir = format!("{path}/");
+                let inside: Vec<&FileStatus> = files.iter().filter(|f| f.path.starts_with(&dir)).collect();
+                let (title, args) = folder_stage_args(&dir, staged, has_head);
+                if action {
+                    acts.push(Act::Quick { title, args: args.clone(), explain: String::new() });
+                } else if resp.clicked() {
+                    tree::toggle(&ctx, salt, &path, true);
+                }
+                let what = if staged {
+                    trs(format!("Folder {path} · × unstages all {count} files in it"), format!("Ordner {path} · × nimmt alle {count} Dateien darin zurück"))
+                } else {
+                    trs(format!("Folder {path} · + stages all {count} files in it"), format!("Ordner {path} · + merkt alle {count} Dateien darin vor"))
+                };
+                let resp = tip_with_cmd(resp, &what, &format!("git {}", args.join(" ")));
+                let any_untracked = inside.iter().any(|f| f.index == '?');
+                let any_tracked = inside.iter().any(|f| f.index != '?');
+                resp.context_menu(|ui| folder_menu(ui, cmds, acts, &dir, count, staged, has_head, any_tracked, any_untracked, root, salt, &paths));
+            }
+            Row::File { idx, depth, .. } => {
+                let f = &files[idx];
+                file_row(ui, cmds, acts, f, staged, is_sel(f), has_head, 8.0 + depth as f32 * tree::INDENT, false);
+            }
+        }
+    }
+}
+
+fn folder_stage_args(dir: &str, staged: bool, has_head: bool) -> (String, Vec<String>) {
+    if !staged {
+        (trs(format!("Stage folder {dir}"), format!("Ordner {dir} vormerken")), vec!["add".into(), "--".into(), dir.into()])
+    } else if has_head {
+        (trs(format!("Unstage folder {dir}"), format!("Ordner {dir} zurücknehmen")), vec!["restore".into(), "--staged".into(), "--".into(), dir.into()])
+    } else {
+        (trs(format!("Unstage folder {dir}"), format!("Ordner {dir} zurücknehmen")), vec!["rm".into(), "--cached".into(), "-r".into(), "-q".into(), "--".into(), dir.into()])
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn folder_menu(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, dir: &str, count: usize, staged: bool, has_head: bool, any_tracked: bool, any_untracked: bool, root: &std::path::Path, salt: &str, paths: &[&str]) {
+    ui.set_min_width(250.0);
+    ui.label(RichText::new(trs(format!("{dir}  ·  {count} files"), format!("{dir}  ·  {count} Dateien"))).size(11.5).color(theme::TEXT_FAINT));
+    ui.separator();
+    let (title, args) = folder_stage_args(dir, staged, has_head);
+    let label = if staged { tr("Unstage folder", "Ordner zurücknehmen") } else { tr("Stage folder", "Ordner vormerken") };
+    let b = ui.button(label);
+    if tip_with_cmd(b, &title, &format!("git {}", args.join(" "))).clicked() {
+        acts.push(Act::Quick { title, args, explain: String::new() });
+        ui.close();
+    }
+    let mut fills = vec![("paths", dir.to_string())];
+    if any_untracked {
+        fills.push(("flag:-u", "1".into()));
+    }
+    menu_cmd(ui, cmds, acts, "stash_push", Some(tr("Stash folder…", "Ordner zwischenlagern (Stash)…")), fills);
+    if !staged {
+        if any_tracked {
+            menu_cmd(ui, cmds, acts, "restore", Some(tr("Discard changes in folder…", "Änderungen im Ordner verwerfen…")), vec![("paths", dir.to_string())]);
+        }
+        if any_untracked {
+            menu_cmd(ui, cmds, acts, "clean", Some(tr("Delete new files in folder…", "Neue Dateien im Ordner löschen…")), vec![("paths", dir.to_string())]);
+        }
+        menu_cmd(ui, cmds, acts, "commit", Some(tr("Commit only this folder…", "Nur diesen Ordner committen…")), vec![("paths", dir.to_string())]);
+    } else {
+        menu_cmd(ui, cmds, acts, "commit", Some(tr("Commit only this folder…", "Nur diesen Ordner committen…")), vec![("paths", dir.to_string())]);
+    }
+    ui.separator();
+    menu_cmd(ui, cmds, acts, "log", Some(tr("Folder history…", "Ordnerverlauf…")), vec![("paths", dir.to_string())]);
+    menu_item(ui, acts, tr("Show in Explorer", "Im Explorer zeigen"), Act::Explorer(root.join(dir.trim_end_matches('/'))));
+    menu_item(ui, acts, tr("Copy path", "Pfad kopieren"), Act::Copy(dir.to_string()));
+    ui.separator();
+    if ui.button(tr("Expand all", "Alle aufklappen")).clicked() {
+        tree::set_all(ui.ctx(), salt, paths, true);
+        ui.close();
+    }
+    if ui.button(tr("Collapse all", "Alle zuklappen")).clicked() {
+        tree::set_all(ui.ctx(), salt, paths, false);
+        ui.close();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn file_row(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, f: &FileStatus, staged: bool, selected: bool, has_head: bool, indent: f32, show_dir: bool) {
     let code = if f.conflicted() { 'U' } else if staged { f.index } else if f.index == '?' { '?' } else { f.worktree };
     let h = 24.0;
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::click());
@@ -1293,7 +1419,7 @@ fn file_row(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, f: &F
         p.rect_filled(rect, 0, theme::ROW_HOVER);
     }
     // status badge
-    let br = egui::Rect::from_center_size(egui::pos2(rect.left() + 22.0, rect.center().y), Vec2::splat(13.0));
+    let br = egui::Rect::from_center_size(egui::pos2(rect.left() + 22.0 + indent, rect.center().y), Vec2::splat(13.0));
     let col = status_color(code);
     p.rect_filled(br, 3, col.gamma_multiply(0.22));
     p.rect_stroke(br, 3, Stroke::new(1.0, col.gamma_multiply(0.85)), egui::StrokeKind::Inside);
@@ -1304,7 +1430,8 @@ fn file_row(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, f: &F
         None => f.path.clone(),
     };
     let (file, dir) = split_path(&shown);
-    let x = rect.left() + 36.0;
+    let dir = if show_dir { dir } else { "" };
+    let x = rect.left() + 36.0 + indent;
     let action_w = if resp.hovered() || selected { 30.0 } else { 0.0 };
     let clip = egui::Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(rect.right() - 8.0 - action_w, rect.bottom()));
     let pc = ui.painter_at(clip);
@@ -1553,16 +1680,29 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>) {
         DetailTab::Changes => {
             egui::Panel::left("detail_files").resizable(true).default_size(260.0).frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::symmetric(4, 6))).show(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("dfiles").auto_shrink([false; 2]).show(ui, |ui| {
-                    for (st, path) in &d.files {
-                        let sel = r.detail_file.as_deref() == Some(path.as_str());
-                        let (file, _) = split_path(path);
-                        let resp = list_row(ui, None, file, false, "", sel, 18.0).on_hover_text(path);
-                        let br = egui::Rect::from_center_size(egui::pos2(resp.rect.left() + 13.0, resp.rect.center().y), Vec2::splat(12.0));
-                        let col = status_color(st.chars().next().unwrap_or('M'));
-                        ui.painter().rect_filled(br, 3, col.gamma_multiply(0.25));
-                        ui.painter().text(br.center(), Align2::CENTER_CENTER, st.chars().next().unwrap_or('M'), FontId::new(8.5, theme::semibold()), col);
-                        if resp.clicked() {
-                            acts.push(Act::DetailFile(path.clone()));
+                    let paths: Vec<&str> = d.files.iter().map(|f| f.1.as_str()).collect();
+                    let ctx = ui.ctx().clone();
+                    for row in tree::rows(&ctx, "detail", &paths, true) {
+                        match row {
+                            Row::Dir { path, label, depth, count, open } => {
+                                if tree::dir_row(ui, &label, depth, count, open, None).0.clicked() {
+                                    tree::toggle(&ctx, "detail", &path, true);
+                                }
+                            }
+                            Row::File { idx, name, depth } => {
+                                let (st, path) = &d.files[idx];
+                                let indent = 8.0 + depth as f32 * tree::INDENT;
+                                let sel = r.detail_file.as_deref() == Some(path.as_str());
+                                let resp = list_row(ui, None, &name, false, "", sel, indent + 18.0).on_hover_text(path);
+                                let br = egui::Rect::from_center_size(egui::pos2(resp.rect.left() + indent + 14.0, resp.rect.center().y), Vec2::splat(12.0));
+                                let code = st.chars().next().unwrap_or('M');
+                                let col = status_color(code);
+                                ui.painter().rect_filled(br, 3, col.gamma_multiply(0.25));
+                                ui.painter().text(br.center(), Align2::CENTER_CENTER, code, FontId::new(8.5, theme::semibold()), col);
+                                if resp.clicked() {
+                                    acts.push(Act::DetailFile(path.clone()));
+                                }
+                            }
                         }
                     }
                 });
@@ -1577,12 +1717,25 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>) {
         }
         DetailTab::Tree => {
             egui::Panel::left("tree_files").resizable(true).default_size(300.0).frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::symmetric(4, 6))).show(ui, |ui| {
-                egui::ScrollArea::vertical().id_salt("tfiles").auto_shrink([false; 2]).show_rows(ui, 24.0, r.tree.len(), |ui, range| {
-                    for i in range {
-                        let p = &r.tree[i];
-                        let sel = r.tree_file.as_deref() == Some(p.as_str());
-                        if list_row(ui, None, p, false, "", sel, 0.0).clicked() {
-                            acts.push(Act::TreeFile(p.clone()));
+                // The whole tree of the commit: folders start closed, so big projects stay fast.
+                let paths: Vec<&str> = r.tree.iter().map(|s| s.as_str()).collect();
+                let ctx = ui.ctx().clone();
+                let rows = tree::rows(&ctx, "commit-tree", &paths, false);
+                egui::ScrollArea::vertical().id_salt("tfiles").auto_shrink([false; 2]).show_rows(ui, 24.0, rows.len(), |ui, range| {
+                    for row in &rows[range] {
+                        match row {
+                            Row::Dir { path, label, depth, count, open } => {
+                                if tree::dir_row(ui, label, *depth, *count, *open, None).0.clicked() {
+                                    tree::toggle(&ctx, "commit-tree", path, false);
+                                }
+                            }
+                            Row::File { idx, name, depth } => {
+                                let p = &r.tree[*idx];
+                                let sel = r.tree_file.as_deref() == Some(p.as_str());
+                                if list_row(ui, Some(Icon::Changes), name, false, "", sel, 8.0 + *depth as f32 * tree::INDENT + 4.0).on_hover_text(p).clicked() {
+                                    acts.push(Act::TreeFile(p.clone()));
+                                }
+                            }
                         }
                     }
                 });

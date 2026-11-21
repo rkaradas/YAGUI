@@ -529,7 +529,8 @@ pub fn all() -> Vec<Cmd> {
              f("--allow-empty", "Leeren Commit erlauben", "auch ohne Änderungen"),
              f("--no-verify", "Hooks überspringen", "prüfende Skripte (pre-commit) nicht ausführen"),
              v("--author=", "author", "Anderer Autor", "Name <mail@beispiel.de>", "Commit im Namen von jemand anderem"),
-             v("--date=", "date", "Anderes Datum", "2026-01-31 12:00", "Datum des Commits")]));
+             v("--date=", "date", "Anderes Datum", "2026-01-31 12:00", "Datum des Commits"),
+             m("paths", "Nur diese Dateien", "leer = alles Vorgemerkte", "committet nur diese Dateien oder Ordner (bekannte Dateien, auch wenn nicht vorgemerkt)")]));
     l.push(c("commit_amend", Cat::Changes, "Letzten Commit nachbessern (amend)", "commit --amend", X,
         "Ersetzt den letzten Commit: vorgemerkte Änderungen kommen dazu, die Beschreibung kann geändert werden. Ändert die Geschichte – nicht nach Push verwenden.",
         vec![v("-m", "message", "Neue Beschreibung", "leer = alte behalten", "neue Commit-Beschreibung"),
