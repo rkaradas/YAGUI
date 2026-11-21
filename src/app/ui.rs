@@ -318,6 +318,11 @@ impl App {
                         }
                     });
                     ui.separator();
+                    menu_item(ui, acts, tr("Configure SSH Keys…", "SSH-Schlüssel einrichten…"), Act::Ssh);
+                    menu_item(ui, acts, tr("Accounts…", "Konten…"), Act::Accounts);
+                    ui.separator();
+                    menu_item(ui, acts, tr("Preferences…", "Einstellungen…"), Act::Prefs);
+                    ui.separator();
                     if ui.button(tr("Exit", "Beenden")).clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -343,15 +348,16 @@ impl App {
                         menu_item(ui, acts, tr("Refresh  (F5)", "Neu laden  (F5)"), Act::Refresh);
                         if let Some(r) = self.tabs.get(self.active) {
                             let p = r.path.clone();
-                            menu_item(ui, acts, tr("Show in Explorer", "Im Explorer zeigen"), Act::Explorer(p));
+                            menu_item(ui, acts, tr("Open in File Explorer   Ctrl+Alt+O", "Im Datei-Explorer öffnen   Strg+Alt+O"), Act::Explorer(p));
                         }
-                        menu_item(ui, acts, tr("Open in Terminal", "Im Terminal öffnen"), Act::Terminal);
+                        menu_item(ui, acts, tr("Open in Console   Ctrl+Alt+T", "In Konsole öffnen   Strg+Alt+T"), Act::Terminal);
                     });
                 });
                 // Every git command, grouped: the full set stays one click away without
                 // taking space in the window.
                 ui.menu_button(tr("Commands", "Befehle"), |ui| {
                     menu_item(ui, acts, tr("Find a command…   Ctrl+Shift+P", "Befehl suchen…   Strg+Umschalt+P"), Act::QuickLaunch);
+                    menu_item(ui, acts, tr("Browse all commands…", "Alle Befehle durchsuchen…"), Act::Commands(true));
                     ui.separator();
                     for (cat, name, _) in CATS {
                         ui.menu_button(c(name), |ui| {
@@ -374,9 +380,10 @@ impl App {
                         menu_item(ui, acts, tr("Local Changes", "Lokale Änderungen"), Act::View(View::Changes));
                         menu_item(ui, acts, tr("All Commits", "Alle Commits"), Act::View(View::Commits));
                     });
+                    menu_item(ui, acts, tr("Git Commands", "Git-Befehle"), Act::Commands(true));
                     ui.separator();
                     menu_item(ui, acts, tr("Activity", "Aktivität"), Act::ToggleActivity);
-                    menu_item(ui, acts, tr("Console", "Konsole"), Act::ToggleConsole);
+                    menu_item(ui, acts, tr("Git Console (type commands)", "Git-Konsole (Befehle eintippen)"), Act::ToggleConsole);
                     ui.separator();
                     ui.menu_button(tr("Language", "Sprache"), |ui| {
                         for (l, name) in [(Lang::En, "English"), (Lang::De, "Deutsch")] {
@@ -470,13 +477,21 @@ impl App {
                     if tool_button(ui, Icon::Activity, tr("Activity", "Aktivität"), tr("Commands run so far and their output", "Ausgeführte Befehle und ihre Ausgabe"), "", true).clicked() {
                         acts.push(Act::ToggleActivity);
                     }
-                    if tool_button(ui, Icon::Terminal, tr("Console", "Konsole"), tr("Type Git commands yourself", "Git-Befehle selbst eingeben"), "", has).clicked() {
-                        acts.push(Act::ToggleConsole);
+                    let cmds_on = self.commands_view;
+                    let b = tool_button(ui, Icon::Cube, tr("Commands", "Befehle"), tr("All Git commands, explained and runnable", "Alle Git-Befehle, erklärt und ausführbar"), "", true);
+                    if cmds_on {
+                        ui.painter().line_segment([b.rect.left_bottom() + Vec2::new(14.0, -2.0), b.rect.right_bottom() + Vec2::new(-14.0, -2.0)], egui::Stroke::new(2.0, theme::ACCENT));
                     }
-                    if tool_button(ui, Icon::Folder, tr("Open in", "Öffnen in"), tr("Show the folder in Explorer", "Ordner im Explorer zeigen"), "", has).clicked() {
-                        if let Some(r) = self.tabs.get(self.active) {
-                            acts.push(Act::Explorer(r.path.clone()));
-                        }
+                    if b.clicked() {
+                        acts.push(Act::Commands(!cmds_on));
+                    }
+                    separator_v(ui);
+                    if tool_button(ui, Icon::Terminal, tr("Console", "Konsole"), tr("Open a terminal in this repository (Ctrl+Alt+T)", "Terminal in diesem Repository öffnen (Strg+Alt+T)"), "", has).clicked() {
+                        acts.push(Act::Terminal);
+                    }
+                    let b = tool_button(ui, Icon::Folder, tr("Open in", "Öffnen in"), tr("Open the folder in another program", "Ordner in einem anderen Programm öffnen"), "", has);
+                    if has {
+                        egui::Popup::menu(&b).show(|ui| self.open_in_menu(ui));
                     }
                 });
             });
@@ -646,6 +661,7 @@ impl App {
     // Sidebar
 
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
+        let cmds_on = self.commands_view;
         let r = &mut self.tabs[self.active];
         egui::Panel::left("sidebar").resizable(true).default_size(260.0).min_size(200.0).frame(egui::Frame::new().fill(theme::SIDEBAR).inner_margin(egui::Margin { left: 6, right: 6, top: 8, bottom: 6 })).show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -660,11 +676,17 @@ impl App {
             ui.add_space(6.0);
             let n = r.status.len();
             let changes_label = tr("Local Changes", "Lokale Änderungen");
-            if list_row(ui, Some(Icon::Changes), changes_label, false, &if n > 0 { n.to_string() } else { String::new() }, r.view == View::Changes, 0.0).clicked() {
+            if list_row(ui, Some(Icon::Changes), changes_label, false, &if n > 0 { n.to_string() } else { String::new() }, r.view == View::Changes && !cmds_on, 0.0).clicked() {
                 acts.push(Act::View(View::Changes));
             }
-            if list_row(ui, Some(Icon::History), tr("All Commits", "Alle Commits"), false, "", r.view == View::Commits, 0.0).clicked() {
+            if list_row(ui, Some(Icon::History), tr("All Commits", "Alle Commits"), false, "", r.view == View::Commits && !cmds_on, 0.0).clicked() {
                 acts.push(Act::View(View::Commits));
+            }
+            if list_row(ui, Some(Icon::Cube), tr("Git Commands", "Git-Befehle"), false, "", cmds_on, 0.0)
+                .on_hover_text(tr("Every Git command, explained, with options and a preview", "Jeder Git-Befehl mit Erklärung, Optionen und Vorschau"))
+                .clicked()
+            {
+                acts.push(Act::Commands(true));
             }
             ui.add_space(8.0);
             ui.add(egui::TextEdit::singleline(&mut r.filter).hint_text(tr("Filter", "Filter")).desired_width(f32::INFINITY));
@@ -715,10 +737,15 @@ impl App {
                             ui.ctx().data_mut(|d| d.insert_temp(key, !open));
                         }
                         let rn2 = rn.clone();
+                        let url2 = url.clone();
                         let cmds = &self.cmds;
                         resp.context_menu(|ui| {
                             menu_cmd(ui, cmds, acts, "fetch", Some(&format!("{} {rn2}", tr("Fetch from", "Fetch von"))), vec![("remote", rn2.clone())]);
                             menu_cmd(ui, cmds, acts, "remote_set_url", None, vec![("remote", rn2.clone())]);
+                            if let Some(other) = super::auth::switch_remote_url(&url2) {
+                                let label = if other.starts_with("git@") { tr("Switch to SSH address…", "Auf SSH-Adresse umstellen…") } else { tr("Switch to HTTPS address…", "Auf HTTPS-Adresse umstellen…") };
+                                menu_cmd(ui, cmds, acts, "remote_set_url", Some(label), vec![("remote", rn2.clone()), ("url", other)]);
+                            }
                             menu_cmd(ui, cmds, acts, "remote_rename", None, vec![("remote", rn2.clone())]);
                             menu_cmd(ui, cmds, acts, "remote_prune", None, vec![("remote", rn2.clone())]);
                             ui.separator();
@@ -1175,7 +1202,27 @@ impl App {
                 }
             }
         });
-        ui.add_space(28.0);
+        ui.add_space(14.0);
+        ui.vertical_centered(|ui| {
+            ui.horizontal(|ui| {
+                let links = [
+                    (tr("Browse all Git commands", "Alle Git-Befehle ansehen"), Act::Commands(true)),
+                    (tr("Set up SSH keys", "SSH-Schlüssel einrichten"), Act::Ssh),
+                    (tr("Accounts", "Konten"), Act::Accounts),
+                ];
+                let widths: f32 = 3.0 * 150.0;
+                ui.add_space(((ui.available_width() - widths) / 2.0).max(0.0));
+                for (i, (label, act)) in links.into_iter().enumerate() {
+                    if i > 0 {
+                        ui.label(RichText::new("·").color(theme::TEXT_FAINT));
+                    }
+                    if ui.link(RichText::new(label).size(12.5)).clicked() {
+                        acts.push(act);
+                    }
+                }
+            });
+        });
+        ui.add_space(24.0);
         if !self.recent.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.set_max_width(w);

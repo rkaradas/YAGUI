@@ -1,6 +1,7 @@
 //! Application state and logic: repositories, running git, jobs, interactive rebase.
 //! The window itself is drawn in `app/ui.rs` and `app/dialogs.rs`.
 
+mod auth;
 mod dialogs;
 mod ui;
 
@@ -305,6 +306,10 @@ enum Act {
     Lang(Lang),
     ToggleActivity,
     ToggleConsole,
+    Commands(bool),
+    Ssh,
+    Accounts,
+    Prefs,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -314,6 +319,12 @@ struct Saved {
     recent: Vec<String>,
     #[serde(default)]
     lang: Lang,
+    #[serde(default)]
+    shell: auth::ShellTool,
+    #[serde(default)]
+    accounts: Vec<auth::Account>,
+    #[serde(default)]
+    extra_keys: Vec<String>,
 }
 
 pub struct App {
@@ -340,6 +351,17 @@ pub struct App {
     show_console: bool,
     notice: Option<u64>,
     lang: Lang,
+    /// The "all Git commands" view, shown instead of history / changes.
+    commands_view: bool,
+    lib_search: String,
+    lib_form: Option<Form>,
+    ssh: Option<auth::SshState>,
+    creds: Option<auth::CredState>,
+    prefs: Option<auth::PrefsState>,
+    shell: auth::ShellTool,
+    editors: Vec<auth::Editor>,
+    extra_keys: Vec<PathBuf>,
+    accounts: Vec<auth::Account>,
 }
 
 /// How often the .git files are checked for changes.
@@ -388,6 +410,16 @@ impl App {
             show_console: false,
             notice: None,
             lang,
+            commands_view: false,
+            lib_search: String::new(),
+            lib_form: None,
+            ssh: None,
+            creds: None,
+            prefs: None,
+            shell: saved.shell,
+            editors: auth::detect_editors(),
+            extra_keys: saved.extra_keys.iter().map(PathBuf::from).collect(),
+            accounts: saved.accounts.clone(),
         };
         let cwd_repo = std::env::current_dir().ok().and_then(|d| git::find_toplevel(&d));
         if let Some(r) = repo.and_then(|r| git::find_toplevel(&r)) {
@@ -420,6 +452,17 @@ impl App {
                 t.reload_file_diff();
             }
         }
+        match std::env::var("YAGUI_DIALOG").as_deref() {
+            Ok("ssh") => app.ssh = Some(auth::SshState::new(&app.extra_keys)),
+            Ok("accounts") => app.creds = Some(auth::CredState::new()),
+            Ok("prefs") => app.prefs = Some(auth::PrefsState::new()),
+            Ok("commands") => {
+                app.commands_view = true;
+                let i = catalog::find(&app.cmds, "merge");
+                app.lib_form = Some(app.make_form(i, &[]));
+            }
+            _ => {}
+        }
         if let Ok(id) = std::env::var("YAGUI_OPEN") {
             if app.cmds.iter().any(|c| c.id == id) {
                 let id: &'static str = app.cmds.iter().find(|c| c.id == id).unwrap().id;
@@ -438,6 +481,9 @@ impl App {
             active: self.active,
             recent: self.recent.clone(),
             lang: self.lang,
+            shell: self.shell,
+            accounts: self.accounts.clone(),
+            extra_keys: self.extra_keys.iter().map(|p| p.display().to_string()).collect(),
         };
         if let Some(p) = state_file() {
             let _ = std::fs::create_dir_all(p.parent().unwrap());
@@ -767,6 +813,15 @@ impl eframe::App for App {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)) {
             self.quick = Some(String::new());
         }
+        if let Some(p) = self.repo().map(|r| r.path.clone()) {
+            let ca = egui::Modifiers::CTRL | egui::Modifiers::ALT;
+            if ctx.input_mut(|i| i.consume_key(ca, egui::Key::T)) {
+                auth::open_terminal(self.shell, &p);
+            }
+            if ctx.input_mut(|i| i.consume_key(ca, egui::Key::O)) {
+                auth::open_explorer(&p);
+            }
+        }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F5)) {
             if let Some(t) = self.tabs.get_mut(self.active) {
                 t.refresh();
@@ -781,7 +836,14 @@ impl eframe::App for App {
         self.toolbar(ui, &mut acts);
         self.tab_bar(ui, &mut acts);
         self.status_bar(ui, &mut acts);
-        if self.tabs.is_empty() {
+        if self.commands_view {
+            if !self.tabs.is_empty() {
+                self.sidebar(ui, &mut acts);
+            }
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL)).show(ui, |ui| {
+                self.commands_view(ui, &mut acts, &ctx);
+            });
+        } else if self.tabs.is_empty() {
             egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL)).show(ui, |ui| {
                 self.welcome(ui, &mut acts);
             });
@@ -800,6 +862,7 @@ impl eframe::App for App {
         self.dialogs(&ctx);
         self.activity_window(&ctx);
         self.console_window(&ctx);
+        self.auth_dialogs(&ctx);
         self.apply(acts, &ctx);
     }
 }
@@ -855,6 +918,7 @@ impl App {
                     }
                 }
                 Act::View(v) => {
+                    self.commands_view = false;
                     if let Some(t) = self.tabs.get_mut(self.active) {
                         t.view = v;
                         if v == View::Changes {
@@ -944,10 +1008,10 @@ impl App {
                 }
                 Act::Terminal => {
                     if let Some(r) = self.repo() {
-                        open_terminal(&r.path);
+                        auth::open_terminal(self.shell, &r.path);
                     }
                 }
-                Act::Explorer(p) => open_explorer(&p),
+                Act::Explorer(p) => auth::open_explorer(&p),
                 Act::QuickLaunch => self.quick = Some(String::new()),
                 Act::JumpToRef(name) => {
                     if let Some(t) = self.tabs.get_mut(self.active) {
@@ -968,32 +1032,17 @@ impl App {
                 }
                 Act::ToggleActivity => self.show_activity = !self.show_activity,
                 Act::ToggleConsole => self.show_console = !self.show_console,
+                Act::Commands(on) => {
+                    self.commands_view = on;
+                    if on && self.lib_form.is_none() {
+                        let i = catalog::find(&self.cmds, "status");
+                        self.lib_form = Some(self.make_form(i, &[]));
+                    }
+                }
+                Act::Ssh => self.ssh = Some(auth::SshState::new(&self.extra_keys)),
+                Act::Accounts => self.creds = Some(auth::CredState::new()),
+                Act::Prefs => self.prefs = Some(auth::PrefsState::new()),
             }
         }
     }
-}
-
-fn open_terminal(path: &Path) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("cmd").args(["/c", "start", "", "cmd"]).current_dir(path).creation_flags(0x0800_0000).spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open").args(["-a", "Terminal"]).arg(path).spawn();
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = std::process::Command::new("x-terminal-emulator").current_dir(path).spawn();
-    }
-}
-
-fn open_explorer(path: &Path) {
-    #[cfg(windows)]
-    let _ = std::process::Command::new("explorer").arg(path).spawn();
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(path).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }

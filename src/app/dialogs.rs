@@ -120,7 +120,7 @@ fn job_output(ui: &mut egui::Ui, j: &Job, max_h: f32) {
 /// The body of a command dialog: description, options, and a footer with the command shown
 /// small and grey, Cancel and the main action.
 #[allow(clippy::too_many_arguments)]
-fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &[Job], line: &str, args: &[Arg], show_more: &mut bool) -> FormAction {
+fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &[Job], line: &str, args: &[Arg], show_more: &mut bool, cancel_label: &str) -> FormAction {
     let cmd = &cmds[f.cmd];
     let mut action = FormAction::None;
     ui.set_width(500.0);
@@ -284,7 +284,7 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
             if r.clicked() {
                 action = FormAction::Run;
             }
-            if ui.add(egui::Button::new(tr("Cancel", "Abbrechen")).min_size(Vec2::new(80.0, 26.0))).clicked() {
+            if ui.add(egui::Button::new(cancel_label).min_size(Vec2::new(80.0, 26.0))).clicked() {
                 action = FormAction::Cancel;
             }
         });
@@ -312,7 +312,7 @@ impl App {
                 .default_pos(ctx.content_rect().center())
                 .frame(egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(16)))
                 .show(ctx, |ui| {
-                    act = form_ui(ui, &self.cmds, &mut f, &sug, &self.jobs, &line, &args, &mut more);
+                    act = form_ui(ui, &self.cmds, &mut f, &sug, &self.jobs, &line, &args, &mut more, tr("Cancel", "Abbrechen"));
                 });
             ctx.data_mut(|d| d.insert_temp(more_id, more));
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -656,5 +656,194 @@ impl App {
     }
 }
 
-#[allow(dead_code)]
-fn _unused(_: Stroke) {}
+// ---------------------------------------------------------------------------------------------
+// The "Git Commands" view: every command of the catalog, grouped and searchable on the left,
+// the selected one explained and runnable on the right.
+
+fn danger_dot(p: &egui::Painter, pos: egui::Pos2, d: Danger) {
+    let col = match d {
+        Danger::Read => theme::GREEN,
+        Danger::Change => theme::ACCENT,
+        Danger::Risky => theme::ORANGE,
+    };
+    p.circle_filled(pos, 3.5, col);
+}
+
+fn danger_text(d: Danger) -> &'static str {
+    match d {
+        Danger::Read => tr("Only shows information, changes nothing", "Zeigt nur an, ändert nichts"),
+        Danger::Change => tr("Changes the repository", "Ändert das Repository"),
+        Danger::Risky => tr("Can discard work or rewrite history", "Kann Arbeit verwerfen oder die Geschichte umschreiben"),
+    }
+}
+
+impl App {
+    pub(super) fn commands_view(&mut self, ui: &mut egui::Ui, acts: &mut Vec<super::Act>, ctx: &egui::Context) {
+        let sel = self.lib_form.as_ref().map(|f| f.cmd);
+        let mut pick: Option<usize> = None;
+        egui::Panel::left("cmdlib_list")
+            .resizable(true)
+            .default_size(310.0)
+            .min_size(240.0)
+            .frame(egui::Frame::new().fill(theme::PANEL_DARK).inner_margin(egui::Margin { left: 8, right: 8, top: 10, bottom: 6 }))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr("Git Commands", "Git-Befehle")).font(FontId::new(14.0, theme::semibold())).color(theme::TEXT_STRONG));
+                    ui.label(RichText::new(self.cmds.len().to_string()).size(11.5).color(theme::TEXT_FAINT));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if icon_button(ui, Icon::Close, tr("Close (back to the repository)", "Schließen (zurück zum Repository)")).clicked() {
+                            acts.push(super::Act::Commands(false));
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+                ui.add(egui::TextEdit::singleline(&mut self.lib_search).hint_text(tr("Search, e.g. undo, tag, remote", "Suchen, z. B. rückgängig, tag, remote")).desired_width(f32::INFINITY));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for d in [Danger::Read, Danger::Change, Danger::Risky] {
+                        let (r, _) = ui.allocate_exact_size(Vec2::new(8.0, 14.0), egui::Sense::hover());
+                        danger_dot(ui.painter(), r.center(), d);
+                        let l = match d {
+                            Danger::Read => tr("reads", "liest"),
+                            Danger::Change => tr("changes", "ändert"),
+                            Danger::Risky => tr("risky", "riskant"),
+                        };
+                        ui.label(RichText::new(l).size(11.0).color(theme::TEXT_FAINT)).on_hover_text(danger_text(d));
+                        ui.add_space(6.0);
+                    }
+                });
+                ui.add_space(6.0);
+                let q = self.lib_search.to_lowercase();
+                let hit = |cmd: &Cmd| {
+                    q.is_empty()
+                        || c(cmd.title).to_lowercase().contains(&q)
+                        || cmd.title.to_lowercase().contains(&q)
+                        || cmd.base.to_lowercase().contains(&q)
+                        || c(cmd.summary).to_lowercase().contains(&q)
+                        || cmd.summary.to_lowercase().contains(&q)
+                };
+                egui::ScrollArea::vertical().id_salt("cmdlib_scroll").auto_shrink([false; 2]).show(ui, |ui| {
+                    for (cat, name, about) in CATS {
+                        let items: Vec<usize> = self.cmds.iter().enumerate().filter(|(_, x)| x.cat == *cat && hit(x)).map(|(i, _)| i).collect();
+                        if items.is_empty() {
+                            continue;
+                        }
+                        let key = Id::unique(("cmdcat", *name));
+                        let has_sel = sel.map(|s| self.cmds[s].cat == *cat).unwrap_or(false);
+                        let stored = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(key, || has_sel));
+                        let open = stored || !q.is_empty();
+                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), egui::Sense::click());
+                        let p = ui.painter_at(rect);
+                        if resp.hovered() {
+                            p.rect_filled(rect, 3, theme::ROW_HOVER);
+                        }
+                        crate::icons::draw(&p, egui::Rect::from_center_size(egui::pos2(rect.left() + 8.0, rect.center().y), Vec2::splat(9.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, theme::TEXT_DIM);
+                        p.text(egui::pos2(rect.left() + 20.0, rect.center().y), Align2::LEFT_CENTER, c(name).to_uppercase(), FontId::new(11.0, theme::semibold()), theme::TEXT_DIM);
+                        p.text(egui::pos2(rect.right() - 6.0, rect.center().y), Align2::RIGHT_CENTER, items.len().to_string(), FontId::proportional(11.0), theme::TEXT_FAINT);
+                        let resp = resp.on_hover_text(c(about));
+                        if resp.clicked() && q.is_empty() {
+                            ctx.data_mut(|d| d.insert_temp(key, !stored));
+                        }
+                        if !open {
+                            continue;
+                        }
+                        for i in items {
+                            let cmd = &self.cmds[i];
+                            let is_sel = sel == Some(i);
+                            let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), egui::Sense::click());
+                            let p = ui.painter_at(rect);
+                            if is_sel {
+                                p.rect_filled(rect, 3, theme::ROW_SEL);
+                            } else if resp.hovered() {
+                                p.rect_filled(rect, 3, theme::ROW_HOVER);
+                            }
+                            danger_dot(&p, egui::pos2(rect.left() + 22.0, rect.center().y), cmd.danger);
+                            p.text(egui::pos2(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, c(cmd.title), FontId::proportional(12.5), if is_sel { theme::TEXT_STRONG } else { theme::TEXT });
+                            if resp.on_hover_text(c(cmd.summary)).clicked() {
+                                pick = Some(i);
+                            }
+                        }
+                        ui.add_space(4.0);
+                    }
+                });
+            });
+        if let Some(i) = pick {
+            if sel != Some(i) {
+                self.lib_form = Some(self.make_form(i, &[]));
+            }
+        }
+
+        let sug = Suggest::from(self.tabs.get(self.active));
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin { left: 28, right: 20, top: 18, bottom: 10 })).show(ui, |ui| {
+            let Some(mut f) = self.lib_form.take() else {
+                ui.add_space(80.0);
+                ui.vertical_centered(|ui| {
+                    icon(ui, Icon::Cube, 40.0, theme::TEXT_FAINT);
+                    ui.label(RichText::new(tr("Pick a command on the left to see what it does.", "Wähle links einen Befehl, um zu sehen, was er tut.")).color(theme::TEXT_DIM));
+                });
+                return;
+            };
+            let cmd = self.cmds[f.cmd].clone();
+            let args = self.form_args(&f);
+            let line = self.display_line(&f);
+            let mut act = FormAction::None;
+            egui::ScrollArea::vertical().id_salt("cmdlib_detail").auto_shrink([false; 2]).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(c(cmd.title)).font(FontId::new(18.0, theme::semibold())).color(theme::TEXT_STRONG));
+                    ui.add_space(6.0);
+                    let (r, _) = ui.allocate_exact_size(Vec2::new(8.0, 18.0), egui::Sense::hover());
+                    danger_dot(ui.painter(), r.center(), cmd.danger);
+                    ui.label(RichText::new(danger_text(cmd.danger)).size(11.5).color(theme::TEXT_FAINT));
+                });
+                ui.label(RichText::new(c(CATS.iter().find(|x| x.0 == cmd.cat).map(|x| x.1).unwrap_or(""))).size(11.5).color(theme::TEXT_FAINT));
+                ui.add_space(12.0);
+                // What will run, part by part.
+                egui::Frame::new().fill(theme::PANEL_DARK).stroke(Stroke::new(1.0, theme::LINE)).corner_radius(5).inner_margin(12).show(ui, |ui| {
+                    ui.set_width(ui.available_width().min(620.0));
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(tr("What runs", "Was ausgeführt wird")).size(11.0).color(theme::TEXT_FAINT));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(egui::Button::new(RichText::new(tr("Copy", "Kopieren")).size(11.5).color(theme::TEXT_DIM)).frame(false)).clicked() {
+                                ctx.copy_text(line.clone());
+                            }
+                        });
+                    });
+                    ui.add(egui::Label::new(RichText::new(&line).monospace().size(13.0).color(theme::TEXT_STRONG)).wrap());
+                    if !args.is_empty() {
+                        ui.add_space(6.0);
+                        egui::Grid::new("cmdlib_explain").num_columns(2).spacing([14.0, 3.0]).show(ui, |ui| {
+                            for a in &args {
+                                ui.label(RichText::new(catalog::quote_for_display(a.text.trim_start_matches('!'))).monospace().size(11.5).color(theme::ACCENT));
+                                ui.add(egui::Label::new(RichText::new(&a.help).size(12.0).color(theme::TEXT_DIM)).wrap());
+                                ui.end_row();
+                            }
+                        });
+                    }
+                });
+                ui.add_space(14.0);
+                let more_id = Id::unique(("libmore", f.cmd));
+                let mut more = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(more_id, || false));
+                ui.scope(|ui| {
+                    act = form_ui(ui, &self.cmds, &mut f, &sug, &self.jobs, &line, &args, &mut more, tr("Reset", "Zurücksetzen"));
+                });
+                ctx.data_mut(|d| d.insert_temp(more_id, more));
+                ui.add_space(6.0);
+                let man = cmd.base.trim_start_matches('!').split_whitespace().next().unwrap_or("").to_string();
+                if !man.is_empty() && cmd.kind != Kind::Free && ui.link(RichText::new(trs(format!("Full manual: git help {man}"), format!("Ganze Anleitung: git help {man}"))).size(11.5)).clicked() {
+                    super::auth::open_url(&format!("https://git-scm.com/docs/git-{man}"));
+                }
+            });
+            match act {
+                FormAction::Cancel => f = self.make_form(f.cmd, &[]),
+                FormAction::Run => {
+                    let (fc, values, extra, free) = (f.cmd, f.values.clone(), f.extra.clone(), f.free.clone());
+                    let id = self.run_form(f, ctx);
+                    f = Form { cmd: fc, values, extra, free, last_job: id, open_after: None };
+                }
+                FormAction::None => {}
+            }
+            self.lib_form = Some(f);
+        });
+    }
+}
