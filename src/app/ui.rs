@@ -1031,7 +1031,10 @@ impl App {
                     for (rn, url) in &r.remotes {
                         let key = Id::unique(("remote-open", rn));
                         let open = ui.ctx().data_mut(|d| *d.get_temp_mut_or_insert_with(key, || false));
-                        let resp = list_row(ui, Some(Icon::Cloud), rn, false, "", false, 8.0).on_hover_text(url);
+                        let n_br = r.remote_branches.iter().filter(|b| b.name.starts_with(&format!("{rn}/")) && !b.name.ends_with("/HEAD")).count();
+                        let resp = list_row(ui, Some(Icon::Cloud), rn, false, &n_br.to_string(), false, 20.0).on_hover_text(url);
+                        // Arrow like the section headers: the remote opens to show its branches.
+                        icons::draw(&ui.painter_at(resp.rect), egui::Rect::from_center_size(egui::pos2(resp.rect.left() + 16.0, resp.rect.center().y), Vec2::splat(10.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, theme::TEXT_DIM());
                         if resp.clicked() {
                             ui.ctx().data_mut(|d| d.insert_temp(key, !open));
                         }
@@ -1060,9 +1063,27 @@ impl App {
                             menu_cmd(ui, cmds, acts, "remote_remove", None, vec![("remote", rn2.clone())]);
                         });
                         if open {
-                            for b in r.remote_branches.iter().filter(|b| b.name.starts_with(&format!("{rn}/")) && matches(&b.name)) {
-                                let short = b.name.trim_start_matches(&format!("{rn}/")).to_string();
-                                let resp = list_row(ui, Some(Icon::Branch), &short, false, "", false, 26.0);
+                            // Remote branches as a folder tree too ("feature/x" lives in "feature").
+                            let rbs: Vec<&git::RefInfo> = r.remote_branches.iter().filter(|b| b.name.starts_with(&format!("{rn}/")) && matches(&b.name)).collect();
+                            let shorts: Vec<String> = rbs.iter().map(|b| b.name.trim_start_matches(&format!("{rn}/")).to_string()).collect();
+                            let refs: Vec<&str> = shorts.iter().map(|s| s.as_str()).collect();
+                            let ctx2 = ui.ctx().clone();
+                            let salt = format!("remote-tree-{rn}");
+                            let mut visible: Vec<(usize, f32)> = Vec::new();
+                            for row in super::tree::rows(&ctx2, &salt, &refs, true) {
+                                match row {
+                                    super::tree::Row::Dir { path, label, depth, count, open } => {
+                                        if super::tree::dir_row(ui, &label, depth + 2, count, open, None).0.clicked() {
+                                            super::tree::toggle(&ctx2, &salt, &path, true);
+                                        }
+                                    }
+                                    super::tree::Row::File { idx, depth, .. } => visible.push((idx, 30.0 + depth as f32 * super::tree::INDENT)),
+                                }
+                                // draw the branches of this row right away so the order stays
+                                for (idx, indent) in visible.drain(..) {
+                                let b = rbs[idx];
+                                let short = shorts[idx].rsplit('/').next().unwrap_or(&shorts[idx]).to_string();
+                                let resp = list_row(ui, Some(Icon::Branch), &short, false, "", false, indent).on_hover_text(&b.name);
                                 if resp.double_clicked() {
                                     acts.push(Act::Open("checkout_track", vec![("branch", b.name.clone())]));
                                 } else if resp.clicked() {
@@ -1080,6 +1101,7 @@ impl App {
                                     hidden: false,
                                 };
                                 resp.context_menu(|ui| branch_menu(ui, cmds, acts, &name, "", &head, true, &extra));
+                                }
                             }
                         }
                     }

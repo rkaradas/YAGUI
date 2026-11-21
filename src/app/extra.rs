@@ -917,14 +917,22 @@ impl App {
                 let tex = ui.ctx().load_texture("about_icon", egui::ColorImage::from_rgba_unmultiplied([96, 96], &crate::appicon::icon_pixels(96)), egui::TextureOptions::LINEAR);
                 ui.image((tex.id(), Vec2::splat(72.0)));
                 ui.label(RichText::new("YAGUI").font(FontId::new(22.0, theme::semibold())));
+                ui.label(RichText::new("Yet Another Git User Interface").size(13.0).color(theme::TEXT_DIM()));
                 ui.label(RichText::new(format!("{} {}", tr("Version", "Version"), env!("CARGO_PKG_VERSION"))).color(theme::TEXT_DIM()));
                 ui.label(RichText::new(tr("A friendly Git client that shows every command it runs.", "Ein freundlicher Git-Client, der jeden ausgeführten Befehl zeigt.")).size(12.5));
                 ui.label(RichText::new(git.trim()).size(11.5).color(theme::TEXT_FAINT()));
+                ui.add_space(6.0);
+                if ui.link(RichText::new(REPO_URL).size(12.0)).on_hover_text(tr("Source code on GitHub", "Quellcode auf GitHub")).clicked() {
+                    super::auth::open_url(REPO_URL);
+                }
             });
         });
         self.show_about = open;
     }
 }
+
+/// Where YAGUI's source code lives.
+pub const REPO_URL: &str = "https://github.com/rkaradas/YAGUI";
 
 pub const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Ctrl+T", "New tab (Repository Manager)", "Neuer Tab (Repository Manager)"),

@@ -668,6 +668,7 @@ impl App {
             Ok("reposettings") => app.open_repo_settings(),
             Ok("branch") => app.open_branch_dialog(None, false),
             Ok("shortcuts") => app.show_shortcuts = true,
+            Ok("about") => app.show_about = true,
             Ok("tablist") => app.show_tablist = true,
             Ok("light") => {
                 theme::set_light(true);
