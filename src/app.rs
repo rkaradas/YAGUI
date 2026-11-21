@@ -1964,7 +1964,7 @@ impl App {
                 r.reload(git::RELOAD_REFS);
             }
             let tips = git::log_tip_args(r.log_opts).join(" ");
-            ui.label(RichText::new("ⓘ").color(theme::TEXT_DIM)).on_hover_text(format!(
+            ui.label(RichText::new("(?)").color(theme::TEXT_DIM)).on_hover_text(format!(
                 "Der Verlauf zeigt:\ngit log --date-order {tips}\n\nInterne Referenzen (refs/bisect/, refs/worktree/, refs/rewritten/) werden ausgelassen."
             ));
             ui.label(RichText::new("· Rechtsklick auf einen Commit zeigt alle Aktionen").color(theme::TEXT_DIM).size(12.0));
