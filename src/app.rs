@@ -3,6 +3,8 @@
 
 mod auth;
 mod dialogs;
+mod extra;
+mod manager;
 mod tree;
 mod ui;
 
@@ -13,7 +15,7 @@ use std::sync::Arc;
 use eframe::egui;
 
 use crate::catalog::{self, Arg, Cmd, Danger, Kind, Value, P};
-use crate::i18n::{self, tr, Lang};
+use crate::i18n::{self, tr, trs, Lang};
 use crate::git::{self, Commit, CommitDetail, FileStatus, Job, JobSpec, JobState, RefInfo};
 use crate::graph;
 use crate::theme;
@@ -25,6 +27,18 @@ use crate::theme;
 pub enum View {
     Changes,
     Commits,
+}
+
+/// The View menu's switches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ViewOpt {
+    Details,
+    Head,
+    Tags,
+    Stashes,
+    Reflog,
+    FirstParent,
+    ActiveBranch,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,6 +86,11 @@ pub struct Repo {
     git_dir: Option<PathBuf>,
     snap: git::Snapshot,
     locked: Option<&'static str>,
+    /// Commit search: 0 message/author/SHA, 1 path, 2 diff content.
+    search_mode: usize,
+    search_hits: Option<std::collections::HashSet<String>>,
+    /// Local branches, most recently committed first (sidebar sort "Recently used").
+    branch_recency: Vec<String>,
 }
 
 impl Repo {
@@ -111,10 +130,13 @@ impl Repo {
             amend: false,
             scroll_to: None,
             error: None,
-            log_opts: git::LogOptions { all: true, hide_stashes: false, reflog: false },
+            log_opts: git::LogOptions { all: true, ..Default::default() },
             git_dir: None,
             snap: vec![],
             locked: None,
+            search_mode: 0,
+            search_hits: None,
+            branch_recency: vec![],
         };
         r.refresh();
         if !r.commits.is_empty() {
@@ -140,7 +162,7 @@ impl Repo {
         if flags & (git::RELOAD_HEAD | git::RELOAD_REFS | git::RELOAD_REFTABLE) != 0 {
             self.head = git::head_name(&p);
             let sel_sha = self.selected.and_then(|i| self.commits.get(i)).map(|c| c.sha.clone());
-            self.commits = git::load_commits(&p, 3000, self.log_opts);
+            self.commits = git::load_commits(&p, 3000, &self.log_opts);
             let (rows, lanes) = graph::layout(&self.commits);
             self.rows = rows;
             self.lanes = lanes.min(14);
@@ -149,6 +171,7 @@ impl Repo {
             self.remote_branches = r;
             self.tags = t;
             self.stashes = git::load_stashes(&p);
+            self.branch_recency = git::run(&p, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"]).stdout.lines().map(String::from).collect();
             self.worktrees = git::load_worktrees(&p);
             self.selected = sel_sha.and_then(|s| self.commits.iter().position(|c| c.sha == s));
             if let Some(i) = self.selected {
@@ -311,6 +334,41 @@ enum Act {
     Ssh,
     Accounts,
     Prefs,
+    /// Show the Repository Manager tab.
+    Manager,
+    /// Close every tab, or every tab but this one.
+    CloseOthers(Option<usize>),
+    MoveToWorkspace(usize, usize),
+    SwitchWorkspace(usize),
+    OpenInWorkspace(PathBuf, usize),
+    RestoreTab,
+    ToggleTabList,
+    CloseManager,
+    ViewOpt(ViewOpt),
+    NewBranch(Option<String>),
+    NewTag(Option<String>),
+    Stats,
+    Treemap,
+    Bench,
+    RepoSettings,
+    Custom(usize, String),
+    TabStep(i32),
+    Theme(bool),
+    Zoom(f32),
+    Layout(bool),
+    Shortcuts,
+    About,
+    /// Branch in the sidebar: show only its history / hide it / pin it.
+    FilterBranch(String),
+    HideBranch(String),
+    PinBranch(String),
+    Snapshot,
+    RenameRepo(PathBuf),
+    StaleBranches,
+    RenameStash(String),
+    StashPatch(String),
+    /// Interactive-rebase quick action on one commit: 1 reword, 2 edit, 3 squash, 4 fixup, 5 drop.
+    RebaseAction(String, usize),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -328,6 +386,34 @@ struct Saved {
     extra_keys: Vec<String>,
     #[serde(default)]
     flat_files: bool,
+    #[serde(default)]
+    show_tablist: bool,
+    #[serde(default)]
+    known_repos: Vec<String>,
+    #[serde(default)]
+    repo_names: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    src_dirs: Vec<String>,
+    #[serde(default)]
+    hidden_repos: Vec<String>,
+    #[serde(default)]
+    workspaces: Vec<manager::Workspace>,
+    #[serde(default)]
+    ws: usize,
+    #[serde(default)]
+    ws_in_title: bool,
+    #[serde(default)]
+    hide_details: bool,
+    #[serde(default)]
+    custom_cmds: Vec<extra::CustomCmd>,
+    #[serde(default)]
+    repo_cfg: extra::RepoCfg,
+    #[serde(default)]
+    prefs: extra::Prefs,
+    #[serde(default)]
+    pinned: Vec<String>,
+    #[serde(default)]
+    branch_sort: u8,
 }
 
 pub struct App {
@@ -367,6 +453,39 @@ pub struct App {
     accounts: Vec<auth::Account>,
     /// Show changed files as a plain list instead of a folder tree.
     flat_files: bool,
+    show_tablist: bool,
+    manager_tab: bool,
+    manager_active: bool,
+    mgr: manager::ManagerState,
+    known_repos: Vec<PathBuf>,
+    repo_names: std::collections::BTreeMap<String, String>,
+    src_dirs: Vec<PathBuf>,
+    hidden_repos: Vec<String>,
+    workspaces: Vec<manager::Workspace>,
+    ws: usize,
+    ws_in_title: bool,
+    ws_dialog: Option<manager::WsDialog>,
+    treemap: Option<manager::Treemap>,
+    bench: Option<manager::Bench>,
+    closed_tabs: Vec<PathBuf>,
+    prefs_tab_indicator: bool,
+    hide_details: bool,
+    layout_vertical: bool,
+    custom_cmds: Vec<extra::CustomCmd>,
+    repo_cfg: extra::RepoCfg,
+    p: extra::Prefs,
+    show_shortcuts: bool,
+    show_about: bool,
+    branch_dialog: Option<extra::BranchDialog>,
+    repo_dialog: Option<extra::RepoSettingsDialog>,
+    custom_pending: Option<(usize, String)>,
+    last_fetch: f64,
+    /// Branches pinned to the top of the sidebar (path|branch).
+    pinned: Vec<String>,
+    /// Sidebar branch order: 0 alphabetical, 1 backward, 2 recently used.
+    branch_sort: u8,
+    stash_rename: Option<(String, String)>,
+    stale: Option<Vec<(String, bool, String)>>,
 }
 
 /// How often the .git files are checked for changes.
@@ -426,7 +545,47 @@ impl App {
             extra_keys: saved.extra_keys.iter().map(PathBuf::from).collect(),
             accounts: saved.accounts.clone(),
             flat_files: saved.flat_files,
+            show_tablist: saved.show_tablist,
+            manager_tab: false,
+            manager_active: false,
+            mgr: manager::ManagerState::default(),
+            known_repos: saved.known_repos.iter().map(PathBuf::from).collect(),
+            repo_names: saved.repo_names.clone(),
+            src_dirs: if saved.src_dirs.is_empty() {
+                std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).into_iter().collect()
+            } else {
+                saved.src_dirs.iter().map(PathBuf::from).collect()
+            },
+            hidden_repos: saved.hidden_repos.clone(),
+            workspaces: if saved.workspaces.is_empty() { vec![manager::Workspace::new("Home")] } else { saved.workspaces.clone() },
+            ws: saved.ws,
+            ws_in_title: saved.ws_in_title,
+            ws_dialog: None,
+            treemap: None,
+            bench: None,
+            closed_tabs: vec![],
+            prefs_tab_indicator: saved.prefs.tab_indicator,
+            hide_details: saved.hide_details,
+            layout_vertical: saved.prefs.layout_vertical,
+            custom_cmds: saved.custom_cmds.clone(),
+            repo_cfg: saved.repo_cfg.clone(),
+            p: saved.prefs.clone(),
+            show_shortcuts: false,
+            show_about: false,
+            branch_dialog: None,
+            repo_dialog: None,
+            custom_pending: None,
+            last_fetch: 0.0,
+            pinned: saved.pinned.clone(),
+            branch_sort: saved.branch_sort,
+            stash_rename: None,
+            stale: None,
         };
+        theme::set_light(app.p.light);
+        theme::apply_visuals(&cc.egui_ctx);
+        cc.egui_ctx.set_zoom_factor(app.p.zoom.clamp(0.6, 2.0));
+        extra::set_diff_view(4, app.p.diff_font);
+        app.ws = app.ws.min(app.workspaces.len() - 1);
         let cwd_repo = std::env::current_dir().ok().and_then(|d| git::find_toplevel(&d));
         if let Some(r) = repo.and_then(|r| git::find_toplevel(&r)) {
             app.add_tab(r);
@@ -436,7 +595,13 @@ impl App {
             for t in &saved.tabs {
                 let p = PathBuf::from(t);
                 if p.exists() && git::find_toplevel(&p).is_some() {
-                    app.tabs.push(Repo::open(p));
+                    let mut r = Repo::open(p.clone());
+                    r.name = app.tab_name(&p);
+                    if app.p.topo {
+                        r.log_opts.topo = true;
+                        r.reload(git::RELOAD_REFS);
+                    }
+                    app.tabs.push(r);
                 }
             }
             app.active = saved.active.min(app.tabs.len().saturating_sub(1));
@@ -462,6 +627,27 @@ impl App {
             Ok("ssh") => app.ssh = Some(auth::SshState::new(&app.extra_keys)),
             Ok("accounts") => app.creds = Some(auth::CredState::new()),
             Ok("prefs") => app.prefs = Some(auth::PrefsState::new()),
+            Ok("manager") => app.open_manager(),
+            Ok("stats") => {
+                let p = app.tabs.get(app.active).map(|t| t.path.clone());
+                app.open_manager();
+                app.mgr.sel = p;
+                app.mgr.tab = 1;
+            }
+            Ok("treemap") => {
+                if let Some(t) = app.tabs.get(app.active) {
+                    app.treemap = Some(manager::Treemap::new(t.path.clone()));
+                }
+            }
+            Ok("reposettings") => app.open_repo_settings(),
+            Ok("branch") => app.open_branch_dialog(None, false),
+            Ok("shortcuts") => app.show_shortcuts = true,
+            Ok("tablist") => app.show_tablist = true,
+            Ok("light") => {
+                theme::set_light(true);
+                theme::apply_visuals(&cc.egui_ctx);
+            }
+            Ok("vertical") => app.layout_vertical = true,
             Ok("commands") => {
                 app.commands_view = true;
                 let i = catalog::find(&app.cmds, "merge");
@@ -491,6 +677,33 @@ impl App {
             accounts: self.accounts.clone(),
             extra_keys: self.extra_keys.iter().map(|p| p.display().to_string()).collect(),
             flat_files: self.flat_files,
+            show_tablist: self.show_tablist,
+            known_repos: self.known_repos.iter().map(|p| p.display().to_string()).collect(),
+            repo_names: self.repo_names.clone(),
+            src_dirs: self.src_dirs.iter().map(|p| p.display().to_string()).collect(),
+            hidden_repos: self.hidden_repos.clone(),
+            workspaces: {
+                let mut w = self.workspaces.clone();
+                if let Some(cur) = w.get_mut(self.ws) {
+                    cur.tabs = self.tabs.iter().map(|t| t.path.display().to_string()).collect();
+                    cur.active = self.active;
+                }
+                w
+            },
+            ws: self.ws,
+            ws_in_title: self.ws_in_title,
+            hide_details: self.hide_details,
+            custom_cmds: self.custom_cmds.clone(),
+            repo_cfg: self.repo_cfg.clone(),
+            prefs: {
+                let mut p = self.p.clone();
+                p.layout_vertical = self.layout_vertical;
+                p.tab_indicator = self.prefs_tab_indicator;
+                p.light = theme::is_light();
+                p
+            },
+            pinned: self.pinned.clone(),
+            branch_sort: self.branch_sort,
         };
         if let Some(p) = state_file() {
             let _ = std::fs::create_dir_all(p.parent().unwrap());
@@ -503,10 +716,18 @@ impl App {
         self.recent.retain(|r| r != &ps);
         self.recent.insert(0, ps);
         self.recent.truncate(12);
+        self.hidden_repos.retain(|h| PathBuf::from(h) != path);
+        self.manager_active = false;
         if let Some(i) = self.tabs.iter().position(|t| t.path == path) {
             self.active = i;
         } else {
-            self.tabs.push(Repo::open(path));
+            let mut r = Repo::open(path.clone());
+            r.name = self.tab_name(&path);
+            if self.p.topo {
+                r.log_opts.topo = true;
+                r.reload(git::RELOAD_REFS);
+            }
+            self.tabs.push(r);
             self.active = self.tabs.len() - 1;
         }
         self.save();
@@ -632,7 +853,10 @@ impl App {
         Some(id)
     }
 
-    fn spawn(&mut self, spec: JobSpec, ctx: &egui::Context) -> u64 {
+    fn spawn(&mut self, mut spec: JobSpec, ctx: &egui::Context) -> u64 {
+        if self.p.verbose && !spec.automatic && spec.program == "git" {
+            spec.env.push(("GIT_TRACE".into(), "1".into()));
+        }
         let id = self.next_job;
         self.next_job += 1;
         self.jobs.push(git::start_job(id, spec, ctx.clone()));
@@ -820,6 +1044,58 @@ impl eframe::App for App {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)) {
             self.quick = Some(String::new());
         }
+        {
+            let c = egui::Modifiers::CTRL;
+            let cs = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+            let mut keys: Vec<Act> = vec![];
+            let mut k = |m: egui::Modifiers, key: egui::Key, a: Act| {
+                if ctx.input_mut(|i| i.consume_key(m, key)) {
+                    keys.push(a);
+                }
+            };
+            k(c, egui::Key::T, Act::Manager);
+            k(c, egui::Key::O, Act::OpenRepoDialog);
+            k(c, egui::Key::P, Act::QuickLaunch);
+            k(cs, egui::Key::T, Act::RestoreTab);
+            k(c, egui::Key::W, Act::CloseTab(self.active));
+            k(c, egui::Key::Tab, Act::TabStep(1));
+            k(cs, egui::Key::Tab, Act::TabStep(-1));
+            k(c, egui::Key::Num1, Act::View(View::Changes));
+            k(c, egui::Key::Num2, Act::View(View::Commits));
+            k(c, egui::Key::H, Act::ViewOpt(ViewOpt::Head));
+            k(cs, egui::Key::L, Act::Open("fetch", vec![]));
+            k(cs, egui::Key::U, Act::Open("push", vec![]));
+            k(cs, egui::Key::S, Act::Open("stash_push", vec![]));
+            k(cs, egui::Key::B, Act::NewBranch(None));
+            k(c, egui::Key::Comma, Act::Prefs);
+            k(c, egui::Key::Plus, Act::Zoom(0.1));
+            k(c, egui::Key::Equals, Act::Zoom(0.1));
+            k(c, egui::Key::Minus, Act::Zoom(-0.1));
+            k(c, egui::Key::Num0, Act::Zoom(0.0));
+            if !keys.is_empty() && (!self.tabs.is_empty() || keys.iter().all(|a| matches!(a, Act::Manager | Act::OpenRepoDialog | Act::QuickLaunch | Act::RestoreTab | Act::Prefs | Act::Zoom(_)))) {
+                self.apply(keys, &ctx);
+            }
+        }
+        // Fetch remotes automatically (Preferences > General), in the background.
+        if self.p.auto_fetch && self.screenshot.is_none() {
+            let now = ctx.input(|i| i.time);
+            if self.last_fetch == 0.0 {
+                self.last_fetch = now;
+            } else if now - self.last_fetch > self.p.fetch_minutes.max(1) as f64 * 60.0 {
+                self.last_fetch = now;
+                if let Some(r) = self.tabs.get(self.active) {
+                    if !r.remotes.is_empty() {
+                        let mut args = vec!["fetch".to_string(), "--all".into(), "--prune".into()];
+                        if self.p.fetch_tags {
+                            args.push("--tags".into());
+                        }
+                        let display = format!("git {}", args.join(" "));
+                        let cwd = Some(r.path.clone());
+                        self.spawn(JobSpec { title: tr("Fetch (automatic)", "Fetch (automatisch)").into(), program: "git".into(), args, display, cwd, stdin: None, env: vec![("GIT_TERMINAL_PROMPT".into(), "0".into())], changes_repo: true, detached: false, automatic: true }, &ctx);
+                    }
+                }
+            }
+        }
         if let Some(p) = self.repo().map(|r| r.path.clone()) {
             let ca = egui::Modifiers::CTRL | egui::Modifiers::ALT;
             if ctx.input_mut(|i| i.consume_key(ca, egui::Key::T)) {
@@ -843,21 +1119,29 @@ impl eframe::App for App {
         self.toolbar(ui, &mut acts);
         self.tab_bar(ui, &mut acts);
         self.status_bar(ui, &mut acts);
-        if self.commands_view {
+        self.poll_manager(&ctx);
+        if self.show_tablist {
+            self.tab_list(ui, &mut acts);
+        }
+        if self.manager_active {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL())).show(ui, |ui| {
+                self.manager_view(ui, &mut acts, &ctx);
+            });
+        } else if self.commands_view {
             if !self.tabs.is_empty() {
                 self.sidebar(ui, &mut acts);
             }
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL)).show(ui, |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL())).show(ui, |ui| {
                 self.commands_view(ui, &mut acts, &ctx);
             });
         } else if self.tabs.is_empty() {
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL)).show(ui, |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL())).show(ui, |ui| {
                 self.welcome(ui, &mut acts);
             });
         } else {
             self.sidebar(ui, &mut acts);
             let view = self.tabs[self.active].view;
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL)).show(ui, |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL())).show(ui, |ui| {
                 self.notice_bar(ui, &mut acts);
                 self.state_banner(ui, &mut acts);
                 match view {
@@ -870,6 +1154,8 @@ impl eframe::App for App {
         self.activity_window(&ctx);
         self.console_window(&ctx);
         self.auth_dialogs(&ctx);
+        self.manager_dialogs(&ctx);
+        self.extra_dialogs(&ctx);
         self.apply(acts, &ctx);
     }
 }
@@ -955,7 +1241,8 @@ impl App {
                 },
                 Act::CloseTab(i) => {
                     if i < self.tabs.len() {
-                        self.tabs.remove(i);
+                        let t = self.tabs.remove(i);
+                        self.closed_tabs.push(t.path);
                         if self.active >= self.tabs.len() {
                             self.active = self.tabs.len().saturating_sub(1);
                         }
@@ -963,7 +1250,10 @@ impl App {
                     }
                 }
                 Act::SwitchTab(i) => {
+                    self.manager_active = false;
+                    self.commands_view = false;
                     self.active = i;
+                    self.apply_repo_view();
                     if let Some(t) = self.tabs.get_mut(i) {
                         t.refresh();
                     }
@@ -1049,6 +1339,208 @@ impl App {
                 Act::Ssh => self.ssh = Some(auth::SshState::new(&self.extra_keys)),
                 Act::Accounts => self.creds = Some(auth::CredState::new()),
                 Act::Prefs => self.prefs = Some(auth::PrefsState::new()),
+                Act::Manager => self.open_manager(),
+                Act::ToggleTabList => {
+                    self.show_tablist = !self.show_tablist;
+                    self.save();
+                }
+                Act::ViewOpt(o) => {
+                    if o == ViewOpt::Details {
+                        self.hide_details = !self.hide_details;
+                        self.save();
+                    } else if let Some(t) = self.tabs.get_mut(self.active) {
+                        match o {
+                            ViewOpt::Head => {
+                                t.view = View::Commits;
+                                if let Some(i) = t.commits.iter().position(|c| c.refs.iter().any(|r| r == "HEAD" || r.starts_with("HEAD -> "))) {
+                                    t.select_commit(i);
+                                    t.scroll_to = Some(i);
+                                }
+                            }
+                            ViewOpt::Tags => t.log_opts.hide_tags = !t.log_opts.hide_tags,
+                            ViewOpt::Stashes => {
+                                t.log_opts.hide_stashes = !t.log_opts.hide_stashes;
+                                t.reload(git::RELOAD_REFS);
+                            }
+                            ViewOpt::Reflog => {
+                                t.log_opts.reflog = !t.log_opts.reflog;
+                                t.reload(git::RELOAD_REFS);
+                            }
+                            ViewOpt::FirstParent => {
+                                t.log_opts.first_parent = !t.log_opts.first_parent;
+                                t.reload(git::RELOAD_REFS);
+                            }
+                            ViewOpt::ActiveBranch => {
+                                t.log_opts.only = if t.log_opts.only.as_deref() == Some("HEAD") { None } else { Some("HEAD".into()) };
+                                t.reload(git::RELOAD_REFS);
+                            }
+                            ViewOpt::Details => {}
+                        }
+                    }
+                }
+                Act::RenameRepo(p) => {
+                    let n = self.tab_name(&p);
+                    self.mgr.rename = Some((p, n));
+                }
+                Act::StaleBranches => self.open_stale(),
+                Act::RebaseAction(sha, action) => {
+                    // Opens the rebase editor with this commit already set (squash/fixup also
+                    // list the parent it goes into); nothing runs until it is confirmed there.
+                    let base = if action == 3 || action == 4 { format!("{sha}~2") } else { format!("{sha}~1") };
+                    let base = self.tabs.get(self.active).map(|t| git::run(&t.path, &["rev-parse", "--verify", "-q", &base]).stdout.trim().to_string()).filter(|b| !b.is_empty()).unwrap_or_else(|| "--root".into());
+                    self.open_rebase(base);
+                    if let Some(d) = self.rebase.as_mut() {
+                        if let Some(it) = d.items.iter_mut().find(|it| sha.starts_with(&it.short)) {
+                            it.action = action;
+                        }
+                    }
+                }
+                Act::RenameStash(name) => self.stash_rename = Some((name, String::new())),
+                Act::StashPatch(name) => {
+                    if let Some(t) = self.tabs.get(self.active) {
+                        let patch = git::run(&t.path, &["stash", "show", "-p", "--include-untracked", &name]).stdout;
+                        if let Some(f) = rfd::FileDialog::new().set_file_name(format!("{}.patch", name.replace(['{', '}', '@'], ""))).save_file() {
+                            let ok = std::fs::write(&f, patch).is_ok();
+                            self.toast = Some((if ok { trs(format!("Saved {}", f.display()), format!("Gespeichert: {}", f.display())) } else { tr("Could not save the patch.", "Patch konnte nicht gespeichert werden.").into() }, ctx.input(|i| i.time)));
+                        }
+                    }
+                }
+                Act::Snapshot => {
+                    if let Some(t) = self.tabs.get(self.active) {
+                        let msg = format!("Snapshot {}", git::run(&t.path, &["log", "-1", "--format=%h"]).stdout.trim());
+                        let sha = git::run(&t.path, &["stash", "create", &msg]).stdout.trim().to_string();
+                        if sha.is_empty() {
+                            self.toast = Some((tr("Nothing to save: there are no local changes.", "Nichts zu speichern: Es gibt keine lokalen Änderungen.").into(), ctx.input(|i| i.time)));
+                        } else {
+                            self.quick(tr("Save snapshot", "Schnappschuss speichern").into(), vec!["stash".into(), "store".into(), "-m".into(), msg, sha], ctx);
+                        }
+                    }
+                }
+                Act::NewBranch(at) => self.open_branch_dialog(at, false),
+                Act::NewTag(at) => self.open_branch_dialog(at, true),
+                Act::Stats => {
+                    let p = self.tabs.get(self.active).map(|t| t.path.clone());
+                    self.open_manager();
+                    if let Some(p) = p {
+                        self.mgr.sel = Some(p);
+                    }
+                    self.mgr.tab = 1;
+                }
+                Act::Treemap => {
+                    if let Some(t) = self.tabs.get(self.active) {
+                        self.treemap = Some(manager::Treemap::new(t.path.clone()));
+                    }
+                }
+                Act::Bench => {
+                    if let Some(t) = self.tabs.get(self.active) {
+                        self.bench = Some(manager::Bench { path: t.path.clone(), results: vec![], rx: None });
+                    }
+                }
+                Act::RepoSettings => self.open_repo_settings(),
+                Act::Custom(i, r) => self.run_custom(i, r, ctx, false),
+                Act::TabStep(d) => {
+                    let n = self.tabs.len() as i32;
+                    if n > 0 {
+                        self.manager_active = false;
+                        self.active = ((self.active as i32 + d).rem_euclid(n)) as usize;
+                        self.apply_repo_view();
+                    }
+                }
+                Act::Theme(light) => {
+                    theme::set_light(light);
+                    theme::apply_visuals(ctx);
+                    self.save();
+                }
+                Act::Zoom(dz) => {
+                    self.p.zoom = if dz == 0.0 { 1.0 } else { (self.p.zoom + dz).clamp(0.6, 2.0) };
+                    ctx.set_zoom_factor(self.p.zoom);
+                    self.save();
+                }
+                Act::Layout(v) => {
+                    self.layout_vertical = v;
+                    self.save();
+                }
+                Act::Shortcuts => self.show_shortcuts = true,
+                Act::About => self.show_about = true,
+                Act::FilterBranch(b) => {
+                    if let Some(t) = self.tabs.get_mut(self.active) {
+                        t.log_opts.only = if t.log_opts.only.as_deref() == Some(b.as_str()) { None } else { Some(b) };
+                        t.view = View::Commits;
+                        t.reload(git::RELOAD_REFS);
+                    }
+                }
+                Act::HideBranch(b) => {
+                    if let Some(t) = self.tabs.get_mut(self.active) {
+                        if let Some(i) = t.log_opts.hidden.iter().position(|h| *h == b) {
+                            t.log_opts.hidden.remove(i);
+                        } else {
+                            t.log_opts.hidden.push(b);
+                        }
+                        t.reload(git::RELOAD_REFS);
+                    }
+                }
+                Act::PinBranch(b) => {
+                    if let Some(t) = self.tabs.get(self.active) {
+                        let key = format!("{}|{b}", t.path.display());
+                        if let Some(i) = self.pinned.iter().position(|p| *p == key) {
+                            self.pinned.remove(i);
+                        } else {
+                            self.pinned.push(key);
+                        }
+                        self.save();
+                    }
+                }
+                Act::CloseManager => {
+                    self.manager_tab = false;
+                    self.manager_active = false;
+                }
+                Act::CloseOthers(keep) => {
+                    let kept = keep.and_then(|k| self.tabs.get(k).map(|t| t.path.clone()));
+                    let mut i = 0;
+                    while i < self.tabs.len() {
+                        if Some(&self.tabs[i].path) == kept.as_ref() {
+                            i += 1;
+                        } else {
+                            let t = self.tabs.remove(i);
+                            self.closed_tabs.push(t.path);
+                        }
+                    }
+                    self.active = 0;
+                    if self.tabs.is_empty() {
+                        self.open_manager();
+                    }
+                    self.save();
+                }
+                Act::MoveToWorkspace(i, wi) => {
+                    if i < self.tabs.len() && wi < self.workspaces.len() {
+                        let t = self.tabs.remove(i);
+                        let ps = t.path.display().to_string();
+                        if !self.workspaces[wi].tabs.contains(&ps) {
+                            self.workspaces[wi].tabs.push(ps);
+                        }
+                        self.active = self.active.min(self.tabs.len().saturating_sub(1));
+                        self.save();
+                    }
+                }
+                Act::OpenInWorkspace(p, wi) => {
+                    if wi == self.ws {
+                        self.add_tab(p);
+                    } else if wi < self.workspaces.len() {
+                        let ps = p.display().to_string();
+                        if !self.workspaces[wi].tabs.contains(&ps) {
+                            self.workspaces[wi].tabs.push(ps);
+                        }
+                        self.save();
+                    }
+                }
+                Act::SwitchWorkspace(wi) => self.switch_workspace(wi, ctx),
+                Act::RestoreTab => {
+                    if let Some(p) = self.closed_tabs.pop() {
+                        if p.exists() {
+                            self.add_tab(p);
+                        }
+                    }
+                }
             }
         }
     }

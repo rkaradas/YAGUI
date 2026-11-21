@@ -110,24 +110,24 @@ pub fn dir_row(ui: &mut egui::Ui, label: &str, depth: usize, count: usize, open:
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
     let p = ui.painter_at(rect);
     if resp.hovered() {
-        p.rect_filled(rect, 0, theme::ROW_HOVER);
+        p.rect_filled(rect, 0, theme::ROW_HOVER());
     }
     let x = rect.left() + 10.0 + depth as f32 * INDENT;
-    icons::draw(&p, egui::Rect::from_center_size(egui::pos2(x + 4.0, rect.center().y), Vec2::splat(9.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, theme::TEXT_DIM);
-    icons::draw(&p, egui::Rect::from_center_size(egui::pos2(x + 20.0, rect.center().y), Vec2::splat(14.0)), Icon::Folder, theme::YELLOW.gamma_multiply(0.9));
+    icons::draw(&p, egui::Rect::from_center_size(egui::pos2(x + 4.0, rect.center().y), Vec2::splat(9.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, theme::TEXT_DIM());
+    icons::draw(&p, egui::Rect::from_center_size(egui::pos2(x + 20.0, rect.center().y), Vec2::splat(14.0)), Icon::Folder, theme::YELLOW().gamma_multiply(0.9));
     let action_w = if action.is_some() && resp.hovered() { 30.0 } else { 0.0 };
     let clip = egui::Rect::from_min_max(egui::pos2(x + 32.0, rect.top()), egui::pos2(rect.right() - 8.0 - action_w, rect.bottom()));
     let pc = ui.painter_at(clip);
-    let g = pc.layout_no_wrap(label.to_string(), FontId::proportional(13.0), theme::TEXT);
+    let g = pc.layout_no_wrap(label.to_string(), FontId::proportional(13.0), theme::TEXT());
     let gw = g.size().x;
-    pc.galley(egui::pos2(x + 32.0, rect.center().y - g.size().y / 2.0), g, theme::TEXT);
-    pc.text(egui::pos2(x + 32.0 + gw + 7.0, rect.center().y), Align2::LEFT_CENTER, count.to_string(), FontId::proportional(11.0), theme::TEXT_FAINT);
+    pc.galley(egui::pos2(x + 32.0, rect.center().y - g.size().y / 2.0), g, theme::TEXT());
+    pc.text(egui::pos2(x + 32.0 + gw + 7.0, rect.center().y), Align2::LEFT_CENTER, count.to_string(), FontId::proportional(11.0), theme::TEXT_FAINT());
     let mut clicked = false;
     if let (Some(ic), true) = (action, action_w > 0.0) {
         let ar = egui::Rect::from_center_size(egui::pos2(rect.right() - 20.0, rect.center().y), Vec2::new(22.0, 18.0));
         let hovered = resp.hover_pos().map(|p| ar.contains(p)).unwrap_or(false);
-        p.rect_filled(ar, 4, if hovered { Color32::from_rgb(0x4a, 0x4a, 0x4f) } else { Color32::from_rgb(0x3a, 0x3a, 0x3d) });
-        icons::draw(&p, ar.shrink(4.0), ic, theme::TEXT_STRONG);
+        p.rect_filled(ar, 4, if hovered { theme::dk(0x4a, 0x4a, 0x4f) } else { theme::dk(0x3a, 0x3a, 0x3d) });
+        icons::draw(&p, ar.shrink(4.0), ic, theme::TEXT_STRONG());
         clicked = resp.clicked() && hovered;
     }
     (resp, clicked)

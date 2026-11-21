@@ -5,30 +5,67 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Stroke};
 
-pub const TOOLBAR: Color32 = Color32::from_rgb(0x1f, 0x1f, 0x1f);
-pub const TABS: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
-pub const SIDEBAR: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
-pub const PANEL: Color32 = Color32::from_rgb(0x2b, 0x2b, 0x2b);
-pub const PANEL_DARK: Color32 = Color32::from_rgb(0x23, 0x23, 0x23);
-pub const LINE: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
-pub const ROW_SEL: Color32 = Color32::from_rgb(0x3c, 0x3f, 0x44);
-pub const ROW_HOVER: Color32 = Color32::from_rgb(0x32, 0x33, 0x36);
-pub const ACCENT: Color32 = Color32::from_rgb(0x3d, 0x8e, 0xe6);
-pub const ACCENT_DARK: Color32 = Color32::from_rgb(0x2a, 0x6c, 0xb8);
-pub const TEXT: Color32 = Color32::from_rgb(0xdc, 0xdc, 0xdc);
-pub const TEXT_STRONG: Color32 = Color32::from_rgb(0xf2, 0xf2, 0xf2);
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0x95, 0x95, 0x95);
-pub const TEXT_FAINT: Color32 = Color32::from_rgb(0x70, 0x70, 0x70);
-pub const GREEN: Color32 = Color32::from_rgb(0x5f, 0xb8, 0x6a);
-pub const RED: Color32 = Color32::from_rgb(0xe0, 0x5f, 0x5f);
-pub const YELLOW: Color32 = Color32::from_rgb(0xe2, 0xb1, 0x3c);
-pub const ORANGE: Color32 = Color32::from_rgb(0xf0, 0x8c, 0x1a);
-pub const DIFF_ADD: Color32 = Color32::from_rgb(0x22, 0x38, 0x28);
-pub const DIFF_DEL: Color32 = Color32::from_rgb(0x42, 0x24, 0x26);
-pub const DIFF_HUNK: Color32 = Color32::from_rgb(0x2a, 0x30, 0x3a);
+/// Whether the light theme is on (Window > Switch Theme, Appearance > Theme).
+static LIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn set_light(on: bool) { LIGHT.store(on, std::sync::atomic::Ordering::Relaxed); }
+/// A dark-theme fill colour and its light-theme counterpart (same tint, light background).
+pub fn dk(r: u8, g: u8, b: u8) -> Color32 {
+    if !is_light() {
+        return Color32::from_rgb(r, g, b);
+    }
+    let avg = (r as i32 + g as i32 + b as i32) / 3;
+    let base = 0xF4 - (avg - 0x20) / 2;
+    let f = |c: u8| (base + (c as i32 - avg) * 2).clamp(0, 255) as u8;
+    Color32::from_rgb(f(r), f(g), f(b))
+}
+
+pub fn is_light() -> bool { LIGHT.load(std::sync::atomic::Ordering::Relaxed) }
+
+#[allow(non_snake_case)]
+pub fn TOOLBAR() -> Color32 { if is_light() { Color32::from_rgb(0xee, 0xee, 0xee) } else { Color32::from_rgb(0x1f, 0x1f, 0x1f) } }
+#[allow(non_snake_case)]
+pub fn TABS() -> Color32 { if is_light() { Color32::from_rgb(0xe4, 0xe4, 0xe4) } else { Color32::from_rgb(0x1a, 0x1a, 0x1a) } }
+#[allow(non_snake_case)]
+pub fn SIDEBAR() -> Color32 { if is_light() { Color32::from_rgb(0xf3, 0xf3, 0xf3) } else { Color32::from_rgb(0x26, 0x26, 0x26) } }
+#[allow(non_snake_case)]
+pub fn PANEL() -> Color32 { if is_light() { Color32::from_rgb(0xff, 0xff, 0xff) } else { Color32::from_rgb(0x2b, 0x2b, 0x2b) } }
+#[allow(non_snake_case)]
+pub fn PANEL_DARK() -> Color32 { if is_light() { Color32::from_rgb(0xf7, 0xf7, 0xf7) } else { Color32::from_rgb(0x23, 0x23, 0x23) } }
+#[allow(non_snake_case)]
+pub fn LINE() -> Color32 { if is_light() { Color32::from_rgb(0xdc, 0xdc, 0xdc) } else { Color32::from_rgb(0x38, 0x38, 0x38) } }
+#[allow(non_snake_case)]
+pub fn ROW_SEL() -> Color32 { if is_light() { Color32::from_rgb(0xd6, 0xe6, 0xfb) } else { Color32::from_rgb(0x3c, 0x3f, 0x44) } }
+#[allow(non_snake_case)]
+pub fn ROW_HOVER() -> Color32 { if is_light() { Color32::from_rgb(0xec, 0xf1, 0xf8) } else { Color32::from_rgb(0x32, 0x33, 0x36) } }
+#[allow(non_snake_case)]
+pub fn ACCENT() -> Color32 { if is_light() { Color32::from_rgb(0x1f, 0x74, 0xd6) } else { Color32::from_rgb(0x3d, 0x8e, 0xe6) } }
+#[allow(non_snake_case)]
+pub fn ACCENT_DARK() -> Color32 { if is_light() { Color32::from_rgb(0x1f, 0x6b, 0xc6) } else { Color32::from_rgb(0x2a, 0x6c, 0xb8) } }
+#[allow(non_snake_case)]
+pub fn TEXT() -> Color32 { if is_light() { Color32::from_rgb(0x24, 0x24, 0x24) } else { Color32::from_rgb(0xdc, 0xdc, 0xdc) } }
+#[allow(non_snake_case)]
+pub fn TEXT_STRONG() -> Color32 { if is_light() { Color32::from_rgb(0x0a, 0x0a, 0x0a) } else { Color32::from_rgb(0xf2, 0xf2, 0xf2) } }
+#[allow(non_snake_case)]
+pub fn TEXT_DIM() -> Color32 { if is_light() { Color32::from_rgb(0x6a, 0x6a, 0x6a) } else { Color32::from_rgb(0x95, 0x95, 0x95) } }
+#[allow(non_snake_case)]
+pub fn TEXT_FAINT() -> Color32 { if is_light() { Color32::from_rgb(0x96, 0x96, 0x96) } else { Color32::from_rgb(0x70, 0x70, 0x70) } }
+#[allow(non_snake_case)]
+pub fn GREEN() -> Color32 { if is_light() { Color32::from_rgb(0x2e, 0x9a, 0x45) } else { Color32::from_rgb(0x5f, 0xb8, 0x6a) } }
+#[allow(non_snake_case)]
+pub fn RED() -> Color32 { if is_light() { Color32::from_rgb(0xc9, 0x3c, 0x3c) } else { Color32::from_rgb(0xe0, 0x5f, 0x5f) } }
+#[allow(non_snake_case)]
+pub fn YELLOW() -> Color32 { if is_light() { Color32::from_rgb(0xc0, 0x8a, 0x10) } else { Color32::from_rgb(0xe2, 0xb1, 0x3c) } }
+#[allow(non_snake_case)]
+pub fn ORANGE() -> Color32 { if is_light() { Color32::from_rgb(0xe0, 0x7a, 0x10) } else { Color32::from_rgb(0xf0, 0x8c, 0x1a) } }
+#[allow(non_snake_case)]
+pub fn DIFF_ADD() -> Color32 { if is_light() { Color32::from_rgb(0xdd, 0xf4, 0xe2) } else { Color32::from_rgb(0x22, 0x38, 0x28) } }
+#[allow(non_snake_case)]
+pub fn DIFF_DEL() -> Color32 { if is_light() { Color32::from_rgb(0xfb, 0xe2, 0xe2) } else { Color32::from_rgb(0x42, 0x24, 0x26) } }
+#[allow(non_snake_case)]
+pub fn DIFF_HUNK() -> Color32 { if is_light() { Color32::from_rgb(0xe6, 0xee, 0xfa) } else { Color32::from_rgb(0x2a, 0x30, 0x3a) } }
 
 pub const LANES: [Color32; 8] = [
-    ORANGE,
+    Color32::from_rgb(0xf0, 0x8c, 0x1a),
     Color32::from_rgb(0x3d, 0x8e, 0xe6),
     Color32::from_rgb(0x6c, 0xc6, 0x4f),
     Color32::from_rgb(0xb3, 0x7f, 0xeb),
@@ -86,33 +123,41 @@ fn load_fonts(ctx: &egui::Context) {
 
 pub fn apply(ctx: &egui::Context) {
     load_fonts(ctx);
-    ctx.set_theme(egui::Theme::Dark);
-    ctx.style_mut_of(egui::Theme::Dark, |s| {
+    apply_visuals(ctx);
+}
+
+/// Sets egui's colours for the current theme (call again after switching).
+pub fn apply_visuals(ctx: &egui::Context) {
+    let light = is_light();
+    let theme = if light { egui::Theme::Light } else { egui::Theme::Dark };
+    ctx.set_theme(theme);
+    let g = |d: u8, l: u8| if light { Color32::from_gray(l) } else { Color32::from_gray(d) };
+    ctx.style_mut_of(theme, |s| {
         let v = &mut s.visuals;
-        v.panel_fill = PANEL;
-        v.window_fill = Color32::from_rgb(0x2d, 0x2d, 0x2f);
-        v.extreme_bg_color = Color32::from_rgb(0x1c, 0x1c, 0x1c);
-        v.faint_bg_color = Color32::from_rgb(0x2f, 0x2f, 0x2f);
-        v.code_bg_color = Color32::from_rgb(0x1c, 0x1c, 0x1c);
-        v.selection.bg_fill = Color32::from_rgb(0x2a, 0x5a, 0x8e);
-        v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
-        v.hyperlink_color = ACCENT;
-        v.override_text_color = Some(TEXT);
+        v.panel_fill = PANEL();
+        v.window_fill = g(0x2d, 0xfa);
+        v.extreme_bg_color = g(0x1c, 0xff);
+        v.faint_bg_color = g(0x2f, 0xf4);
+        v.code_bg_color = g(0x1c, 0xf4);
+        v.selection.bg_fill = if light { Color32::from_rgb(0xb8, 0xd4, 0xf6) } else { Color32::from_rgb(0x2a, 0x5a, 0x8e) };
+        v.selection.stroke = Stroke::new(1.0, if light { Color32::BLACK } else { Color32::WHITE });
+        v.hyperlink_color = ACCENT();
+        v.override_text_color = Some(TEXT());
         v.window_corner_radius = CornerRadius::same(6);
-        v.window_stroke = Stroke::new(1.0, Color32::from_rgb(0x45, 0x45, 0x48));
-        v.window_shadow = egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(110) };
-        v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(90) };
+        v.window_stroke = Stroke::new(1.0, g(0x45, 0xcc));
+        v.window_shadow = egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if light { 50 } else { 110 }) };
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if light { 40 } else { 90 }) };
         v.menu_corner_radius = CornerRadius::same(5);
-        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, LINE);
-        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-        v.widgets.inactive.weak_bg_fill = Color32::from_rgb(0x38, 0x38, 0x3b);
-        v.widgets.inactive.bg_fill = Color32::from_rgb(0x38, 0x38, 0x3b);
-        v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x46, 0x46, 0x4a));
-        v.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x43, 0x43, 0x47);
-        v.widgets.hovered.bg_fill = Color32::from_rgb(0x43, 0x43, 0x47);
-        v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x58, 0x58, 0x5d));
-        v.widgets.active.weak_bg_fill = Color32::from_rgb(0x4c, 0x4c, 0x51);
-        v.widgets.open.weak_bg_fill = Color32::from_rgb(0x3c, 0x3c, 0x40);
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, LINE());
+        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT());
+        v.widgets.inactive.weak_bg_fill = g(0x38, 0xe8);
+        v.widgets.inactive.bg_fill = g(0x38, 0xe8);
+        v.widgets.inactive.bg_stroke = Stroke::new(1.0, g(0x46, 0xcc));
+        v.widgets.hovered.weak_bg_fill = g(0x43, 0xdd);
+        v.widgets.hovered.bg_fill = g(0x43, 0xdd);
+        v.widgets.hovered.bg_stroke = Stroke::new(1.0, g(0x58, 0xb8));
+        v.widgets.active.weak_bg_fill = g(0x4c, 0xd2);
+        v.widgets.open.weak_bg_fill = g(0x3c, 0xe2);
         for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open, &mut v.widgets.noninteractive] {
             w.corner_radius = CornerRadius::same(4);
         }

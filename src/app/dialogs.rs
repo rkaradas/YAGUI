@@ -101,12 +101,12 @@ fn primary_label(cmd: &Cmd) -> &'static str {
 fn job_output(ui: &mut egui::Ui, j: &Job, max_h: f32) {
     let out = j.output();
     let running = j.state() == JobState::Running;
-    egui::Frame::new().fill(Color32::from_rgb(0x1c, 0x1c, 0x1c)).corner_radius(4).inner_margin(8).show(ui, |ui| {
+    egui::Frame::new().fill(theme::dk(0x1c, 0x1c, 0x1c)).corner_radius(4).inner_margin(8).show(ui, |ui| {
         ui.set_width(ui.available_width());
         if running && out.trim().is_empty() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(RichText::new(tr("Running…", "Läuft…")).color(theme::TEXT_DIM));
+                ui.label(RichText::new(tr("Running…", "Läuft…")).color(theme::TEXT_DIM()));
             });
         } else {
             egui::ScrollArea::vertical().id_salt(("out", j.id)).max_height(max_h).stick_to_bottom(true).show(ui, |ui| {
@@ -125,23 +125,23 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
     let mut action = FormAction::None;
     ui.set_width(500.0);
 
-    ui.label(RichText::new(c(cmd.summary)).size(12.5).color(theme::TEXT_DIM));
+    ui.label(RichText::new(c(cmd.summary)).size(12.5).color(theme::TEXT_DIM()));
     if cmd.danger == Danger::Risky {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            icon(ui, Icon::Warning, 14.0, theme::ORANGE);
-            ui.label(RichText::new(tr("This can discard work or rewrite history.", "Das kann Arbeit verwerfen oder die Geschichte umschreiben.")).size(12.5).color(theme::ORANGE));
+            icon(ui, Icon::Warning, 14.0, theme::ORANGE());
+            ui.label(RichText::new(tr("This can discard work or rewrite history.", "Das kann Arbeit verwerfen oder die Geschichte umschreiben.")).size(12.5).color(theme::ORANGE()));
         });
     }
     if cmd.kind == Kind::External {
         ui.add_space(2.0);
-        ui.label(RichText::new(tr("Opens in its own window.", "Öffnet sich in einem eigenen Fenster.")).size(12.0).color(theme::TEXT_FAINT));
+        ui.label(RichText::new(tr("Opens in its own window.", "Öffnet sich in einem eigenen Fenster.")).size(12.0).color(theme::TEXT_FAINT()));
     }
     ui.add_space(10.0);
 
     if cmd.kind == Kind::Free {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("git").monospace().color(theme::TEXT_DIM));
+            ui.label(RichText::new("git").monospace().color(theme::TEXT_DIM()));
             ui.add(egui::TextEdit::singleline(&mut f.free).hint_text("log --oneline -5").desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
         });
         ui.add_space(6.0);
@@ -155,7 +155,7 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
             match (p, v) {
                 (P::Text { key, label, hint, help, multi, .. }, Value::Text(t)) => {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let l = ui.label(RichText::new(c(label)).color(theme::TEXT_DIM));
+                        let l = ui.label(RichText::new(c(label)).color(theme::TEXT_DIM()));
                         if !help.is_empty() {
                             l.on_hover_text(c(help));
                         }
@@ -192,7 +192,7 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
                 }
                 (P::Choice { label, options, .. }, Value::Choice(sel)) => {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(RichText::new(c(label)).color(theme::TEXT_DIM));
+                        ui.label(RichText::new(c(label)).color(theme::TEXT_DIM()));
                     });
                     egui::ComboBox::from_id_salt(("choice", f.cmd, pi)).width(field_w).selected_text(options.get(*sel).map(|o| c(o.1)).unwrap_or("")).show_ui(ui, |ui| {
                         for (i, (_, l, h)) in options.iter().enumerate() {
@@ -204,7 +204,7 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
                 (P::Flag { args, label, help, .. }, Value::Bool(b)) => {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if first_flag {
-                            ui.label(RichText::new(tr("Options", "Optionen")).color(theme::TEXT_DIM));
+                            ui.label(RichText::new(tr("Options", "Optionen")).color(theme::TEXT_DIM()));
                         }
                     });
                     first_flag = false;
@@ -214,7 +214,7 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
                 }
                 (P::Stdin { label, hint }, Value::Text(t)) => {
                     ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
-                        ui.label(RichText::new(c(label)).color(theme::TEXT_DIM));
+                        ui.label(RichText::new(c(label)).color(theme::TEXT_DIM()));
                     });
                     ui.add(egui::TextEdit::multiline(t).hint_text(c(hint)).desired_rows(4).desired_width(field_w).font(egui::TextStyle::Monospace));
                     ui.end_row();
@@ -226,14 +226,14 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
 
     if cmd.kind == Kind::Normal || cmd.kind == Kind::External {
         ui.add_space(6.0);
-        let resp = ui.add(egui::Button::new(RichText::new(if *show_more { tr("▾ Advanced", "▾ Erweitert") } else { tr("▸ Advanced", "▸ Erweitert") }).size(12.0).color(theme::TEXT_FAINT)).frame(false));
+        let resp = ui.add(egui::Button::new(RichText::new(if *show_more { tr("▾ Advanced", "▾ Erweitert") } else { tr("▸ Advanced", "▸ Erweitert") }).size(12.0).color(theme::TEXT_FAINT())).frame(false));
         if resp.clicked() {
             *show_more = !*show_more;
         }
         if *show_more {
             ui.horizontal(|ui| {
                 ui.add_space(label_w - 60.0);
-                ui.label(RichText::new(tr("Extra arguments", "Weitere Argumente")).size(12.0).color(theme::TEXT_DIM));
+                ui.label(RichText::new(tr("Extra arguments", "Weitere Argumente")).size(12.0).color(theme::TEXT_DIM()));
                 ui.add(egui::TextEdit::singleline(&mut f.extra).hint_text("--verbose").desired_width(field_w - 30.0).font(egui::TextStyle::Monospace));
             });
         }
@@ -247,29 +247,29 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
 
     ui.add_space(10.0);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 0, theme::LINE);
+    ui.painter().rect_filled(rect, 0, theme::LINE());
     ui.add_space(8.0);
 
     let missing = catalog::missing(cmd, &f.values);
     ui.horizontal(|ui| {
         // Subtle command preview; hover explains each part, click copies.
         let text = if line.len() > 58 { format!("{}…", &line[..line.char_indices().nth(57).map(|x| x.0).unwrap_or(line.len())]) } else { line.to_string() };
-        let resp = ui.add(egui::Label::new(RichText::new(text).monospace().size(11.0).color(theme::TEXT_FAINT)).sense(egui::Sense::click()));
+        let resp = ui.add(egui::Label::new(RichText::new(text).monospace().size(11.0).color(theme::TEXT_FAINT())).sense(egui::Sense::click()));
         let args_owned: Vec<Arg> = args.to_vec();
         let full = line.to_string();
         let resp = resp.on_hover_ui(move |ui| {
             ui.set_max_width(460.0);
-            ui.label(RichText::new(&full).monospace().size(12.0).color(theme::TEXT_STRONG));
+            ui.label(RichText::new(&full).monospace().size(12.0).color(theme::TEXT_STRONG()));
             ui.add_space(4.0);
             egui::Grid::new("explain").num_columns(2).spacing([10.0, 2.0]).show(ui, |ui| {
                 for a in &args_owned {
-                    ui.label(RichText::new(catalog::quote_for_display(a.text.trim_start_matches('!'))).monospace().size(11.0).color(theme::TEXT_DIM));
+                    ui.label(RichText::new(catalog::quote_for_display(a.text.trim_start_matches('!'))).monospace().size(11.0).color(theme::TEXT_DIM()));
                     ui.label(RichText::new(&a.help).size(11.5));
                     ui.end_row();
                 }
             });
             ui.add_space(4.0);
-            ui.label(RichText::new(tr("Click to copy", "Klicken zum Kopieren")).size(11.0).color(theme::TEXT_FAINT));
+            ui.label(RichText::new(tr("Click to copy", "Klicken zum Kopieren")).size(11.0).color(theme::TEXT_FAINT()));
         });
         if resp.clicked() {
             ui.ctx().copy_text(line.to_string());
@@ -277,7 +277,7 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let can = missing.is_empty() && (cmd.kind != Kind::Free || !f.free.trim().is_empty());
             let risky = cmd.danger == Danger::Risky;
-            let fill = if !can { Color32::from_rgb(0x36, 0x36, 0x39) } else if risky { Color32::from_rgb(0xa8, 0x3c, 0x3c) } else { theme::ACCENT_DARK };
+            let fill = if !can { theme::dk(0x36, 0x36, 0x39) } else if risky { Color32::from_rgb(0xa8, 0x3c, 0x3c) } else { theme::ACCENT_DARK() };
             let btn = egui::Button::new(RichText::new(primary_label(cmd)).color(Color32::WHITE)).fill(fill).min_size(Vec2::new(88.0, 26.0));
             let missing_txt: Vec<&str> = missing.iter().map(|m| c(m)).collect();
             let r = ui.add_enabled(can, btn).on_disabled_hover_text(trs(format!("Please fill in: {}", missing_txt.join(", ")), format!("Bitte ausfüllen: {}", missing_txt.join(", "))));
@@ -358,20 +358,20 @@ impl App {
             .show(ctx, |ui| {
                 ui.set_width(680.0);
                 let d = self.rebase.as_mut().unwrap();
-                ui.label(RichText::new(tr("Choose what happens to each commit. The oldest commit is at the top; use the arrows to reorder.", "Lege fest, was mit jedem Commit passiert. Oben steht der älteste; mit den Pfeilen änderst du die Reihenfolge.")).size(12.5).color(theme::TEXT_DIM));
+                ui.label(RichText::new(tr("Choose what happens to each commit. The oldest commit is at the top; use the arrows to reorder.", "Lege fest, was mit jedem Commit passiert. Oben steht der älteste; mit den Pfeilen änderst du die Reihenfolge.")).size(12.5).color(theme::TEXT_DIM()));
                 ui.horizontal(|ui| {
-                    icon(ui, Icon::Warning, 14.0, theme::ORANGE);
-                    ui.label(RichText::new(tr("Rewrites history – don't use on commits others already have.", "Schreibt die Geschichte um – nicht für Commits, die andere schon haben.")).size(12.5).color(theme::ORANGE));
+                    icon(ui, Icon::Warning, 14.0, theme::ORANGE());
+                    ui.label(RichText::new(tr("Rewrites history – don't use on commits others already have.", "Schreibt die Geschichte um – nicht für Commits, die andere schon haben.")).size(12.5).color(theme::ORANGE()));
                 });
                 if d.has_merges {
-                    ui.label(RichText::new(tr("Merge commits in this range are left out.", "Merge-Commits in diesem Bereich werden ausgelassen.")).size(12.0).color(theme::YELLOW));
+                    ui.label(RichText::new(tr("Merge commits in this range are left out.", "Merge-Commits in diesem Bereich werden ausgelassen.")).size(12.0).color(theme::YELLOW()));
                 }
                 ui.add_space(8.0);
                 if d.items.is_empty() {
-                    ui.label(RichText::new(tr("There are no commits after this one on the current branch.", "Nach diesem Commit gibt es keine Commits im aktuellen Branch.")).color(theme::TEXT_DIM));
+                    ui.label(RichText::new(tr("There are no commits after this one on the current branch.", "Nach diesem Commit gibt es keine Commits im aktuellen Branch.")).color(theme::TEXT_DIM()));
                 }
                 let mut swap: Option<(usize, usize)> = None;
-                egui::Frame::new().fill(theme::PANEL_DARK).corner_radius(4).inner_margin(6).show(ui, |ui| {
+                egui::Frame::new().fill(theme::PANEL_DARK()).corner_radius(4).inner_margin(6).show(ui, |ui| {
                     egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
                         let n = d.items.len();
                         for (i, it) in d.items.iter_mut().enumerate() {
@@ -386,10 +386,10 @@ impl App {
                                 ui.add_space(4.0);
                                 let act = RB_ACTIONS[it.action];
                                 let col = match act {
-                                    "drop" => theme::RED,
-                                    "squash" | "fixup" => theme::YELLOW,
-                                    "reword" | "edit" => theme::ACCENT,
-                                    _ => theme::TEXT,
+                                    "drop" => theme::RED(),
+                                    "squash" | "fixup" => theme::YELLOW(),
+                                    "reword" | "edit" => theme::ACCENT(),
+                                    _ => theme::TEXT(),
                                 };
                                 egui::ComboBox::from_id_salt(("rb", i, &it.short)).width(120.0).selected_text(RichText::new(rb_label(act).0).color(col)).show_ui(ui, |ui| {
                                     for (ai, a) in RB_ACTIONS.iter().enumerate() {
@@ -401,12 +401,12 @@ impl App {
                                     }
                                 });
                                 ui.add_space(6.0);
-                                ui.label(RichText::new(&it.short).monospace().size(12.0).color(theme::TEXT_FAINT));
+                                ui.label(RichText::new(&it.short).monospace().size(12.0).color(theme::TEXT_FAINT()));
                                 if act == "reword" {
                                     ui.add(egui::TextEdit::singleline(&mut it.new_msg).desired_width(380.0));
                                 } else {
                                     let s = RichText::new(&it.subject);
-                                    ui.label(if act == "drop" { s.strikethrough().color(theme::TEXT_FAINT) } else { s });
+                                    ui.label(if act == "drop" { s.strikethrough().color(theme::TEXT_FAINT()) } else { s });
                                 }
                             });
                         }
@@ -417,11 +417,11 @@ impl App {
                 }
                 ui.add_space(10.0);
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
-                ui.painter().rect_filled(rect, 0, theme::LINE);
+                ui.painter().rect_filled(rect, 0, theme::LINE());
                 ui.add_space(8.0);
                 let todo = App::rebase_todo(d, &[]);
                 ui.horizontal(|ui| {
-                    let r = ui.label(RichText::new(format!("git rebase -i {}", &d.base[..d.base.len().min(12)])).monospace().size(11.0).color(theme::TEXT_FAINT));
+                    let r = ui.label(RichText::new(format!("git rebase -i {}", &d.base[..d.base.len().min(12)])).monospace().size(11.0).color(theme::TEXT_FAINT()));
                     r.on_hover_ui(|ui| {
                         ui.label(RichText::new(tr("Todo list passed to git:", "Aufgabenliste für git:")).size(11.5));
                         ui.label(RichText::new(&todo).monospace().size(11.5));
@@ -463,6 +463,23 @@ impl App {
             .map(|(i, _)| i)
             .take(12)
             .collect();
+        // Recent repositories first, then commands.
+        let mut repos: Vec<std::path::PathBuf> = self.recent.iter().map(std::path::PathBuf::from).collect();
+        for k in &self.known_repos {
+            if !repos.contains(k) {
+                repos.push(k.clone());
+            }
+        }
+        let repo_hits: Vec<std::path::PathBuf> = repos
+            .into_iter()
+            .filter(|p| {
+                let hay = format!("{} {}", self.tab_name(p), p.display()).to_lowercase();
+                words.iter().all(|w| hay.contains(w))
+            })
+            .take(if words.is_empty() { 8 } else { 6 })
+            .collect();
+        let nrepo = repo_hits.len();
+        let mut chosen_repo: Option<std::path::PathBuf> = None;
         ctx.input(|i| {
             if i.key_pressed(egui::Key::ArrowDown) {
                 sel += 1;
@@ -474,9 +491,13 @@ impl App {
                 close = true;
             }
         });
-        sel = sel.min(hits.len().saturating_sub(1));
+        sel = sel.min((hits.len() + nrepo).saturating_sub(1));
         if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-            chosen = hits.get(sel).copied();
+            if sel < nrepo {
+                chosen_repo = repo_hits.get(sel).cloned();
+            } else {
+                chosen = hits.get(sel - nrepo).copied();
+            }
         }
         let screen = ctx.content_rect();
         let w = 560.0;
@@ -487,7 +508,7 @@ impl App {
                 egui::Frame::window(&ctx.global_style()).inner_margin(10).show(ui, |ui| {
                     ui.set_width(w);
                     ui.horizontal(|ui| {
-                        icon(ui, Icon::Search, 16.0, theme::TEXT_DIM);
+                        icon(ui, Icon::Search, 16.0, theme::TEXT_DIM());
                         let resp = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tr("What do you want to do? e.g. \"delete branch\", \"undo\", \"push\"", "Was möchtest du tun? z.B. „Branch löschen“, „rückgängig“, „Push“")).desired_width(f32::INFINITY).frame(egui::Frame::NONE).font(egui::TextStyle::Body));
                         resp.request_focus();
                         if resp.changed() {
@@ -496,22 +517,44 @@ impl App {
                     });
                     ui.add_space(6.0);
                     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 0, theme::LINE);
+                    ui.painter().rect_filled(rect, 0, theme::LINE());
                     ui.add_space(4.0);
+                    if nrepo > 0 {
+                        ui.label(RichText::new(tr("Recent Repositories", "Zuletzt geöffnete Repositories")).font(FontId::new(12.5, theme::semibold())).color(theme::TEXT_DIM()));
+                        for (k, rp) in repo_hits.iter().enumerate() {
+                            let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), egui::Sense::click());
+                            let p = ui.painter_at(rect);
+                            if k == sel || resp.hovered() {
+                                p.rect_filled(rect, 4, if k == sel { theme::ROW_SEL() } else { theme::ROW_HOVER() });
+                            }
+                            crate::icons::draw(&p, egui::Rect::from_center_size(egui::pos2(rect.left() + 16.0, rect.center().y), Vec2::splat(13.0)), Icon::History, theme::TEXT_DIM());
+                            let name = self.tab_name(rp);
+                            let g = p.layout_no_wrap(name, FontId::proportional(13.5), theme::TEXT_STRONG());
+                            let gw = g.size().x;
+                            p.galley(egui::pos2(rect.left() + 30.0, rect.center().y - g.size().y / 2.0), g, theme::TEXT_STRONG());
+                            p.text(egui::pos2(rect.left() + 38.0 + gw, rect.center().y), Align2::LEFT_CENTER, format!("— {}", rp.display()), FontId::proportional(11.5), theme::TEXT_FAINT());
+                            if resp.clicked() {
+                                chosen_repo = Some(rp.clone());
+                            }
+                        }
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(tr("Commands", "Befehle")).font(FontId::new(12.5, theme::semibold())).color(theme::TEXT_DIM()));
+                    }
                     if hits.is_empty() {
-                        ui.label(RichText::new(tr("No matching command", "Kein passender Befehl")).color(theme::TEXT_DIM));
+                        ui.label(RichText::new(tr("No matching command", "Kein passender Befehl")).color(theme::TEXT_DIM()));
                     }
                     for (k, i) in hits.iter().enumerate() {
+                        let k = k + nrepo;
                         let cm = &self.cmds[*i];
                         let group = CATS.iter().find(|x| x.0 == cm.cat).map(|x| c(x.1)).unwrap_or("");
                         let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 40.0), egui::Sense::click());
                         let p = ui.painter_at(rect);
                         if k == sel || resp.hovered() {
-                            p.rect_filled(rect, 4, if k == sel { theme::ROW_SEL } else { theme::ROW_HOVER });
+                            p.rect_filled(rect, 4, if k == sel { theme::ROW_SEL() } else { theme::ROW_HOVER() });
                         }
-                        p.text(egui::pos2(rect.left() + 10.0, rect.top() + 12.0), Align2::LEFT_CENTER, c(cm.title), FontId::proportional(13.5), theme::TEXT_STRONG);
-                        p.text(egui::pos2(rect.right() - 10.0, rect.top() + 12.0), Align2::RIGHT_CENTER, group, FontId::proportional(11.0), theme::TEXT_FAINT);
-                        p.text(egui::pos2(rect.left() + 10.0, rect.bottom() - 11.0), Align2::LEFT_CENTER, c(cm.summary), FontId::proportional(11.5), theme::TEXT_DIM);
+                        p.text(egui::pos2(rect.left() + 10.0, rect.top() + 12.0), Align2::LEFT_CENTER, c(cm.title), FontId::proportional(13.5), theme::TEXT_STRONG());
+                        p.text(egui::pos2(rect.right() - 10.0, rect.top() + 12.0), Align2::RIGHT_CENTER, group, FontId::proportional(11.0), theme::TEXT_FAINT());
+                        p.text(egui::pos2(rect.left() + 10.0, rect.bottom() - 11.0), Align2::LEFT_CENTER, c(cm.summary), FontId::proportional(11.5), theme::TEXT_DIM());
                         if resp.clicked() {
                             chosen = Some(*i);
                         }
@@ -519,7 +562,10 @@ impl App {
                 });
             });
         ctx.data_mut(|d| d.insert_temp(sel_id, sel));
-        if let Some(i) = chosen {
+        if let Some(p) = chosen_repo {
+            ctx.data_mut(|d| d.insert_temp(sel_id, 0usize));
+            self.add_tab(p);
+        } else if let Some(i) = chosen {
             ctx.data_mut(|d| d.insert_temp(sel_id, 0usize));
             let id = self.cmds[i].id;
             self.open_cmd(id, vec![]);
@@ -541,8 +587,19 @@ impl App {
             .pivot(Align2::RIGHT_BOTTOM)
             .default_pos(ctx.content_rect().right_bottom() - Vec2::new(24.0, 40.0))
             .show(ctx, |ui| {
+                // Activity filter: All / User / Background.
+                let fkey = Id::unique("activity_filter");
+                let mut filter = ui.ctx().data(|m| m.get_temp::<u8>(fkey)).unwrap_or(0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(tr("Every Git command started from this window, newest first.", "Jeder Git-Befehl aus diesem Fenster, neueste zuerst.")).size(12.0).color(theme::TEXT_DIM));
+                    for (i, l) in [tr("All", "Alle"), tr("User", "Von dir"), tr("Background", "Im Hintergrund")].iter().enumerate() {
+                        if ui.selectable_label(filter == i as u8, *l).clicked() {
+                            filter = i as u8;
+                        }
+                    }
+                });
+                ui.ctx().data_mut(|m| m.insert_temp(fkey, filter));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr("Every Git command started from this window, newest first.", "Jeder Git-Befehl aus diesem Fenster, neueste zuerst.")).size(12.0).color(theme::TEXT_DIM()));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.small_button(tr("Clear", "Leeren")).clicked() {
                             clear = true;
@@ -553,14 +610,17 @@ impl App {
                 egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
                     if self.jobs.is_empty() {
                         ui.add_space(20.0);
-                        ui.vertical_centered(|ui| ui.label(RichText::new(tr("Nothing has run yet.", "Noch nichts ausgeführt.")).color(theme::TEXT_FAINT)));
+                        ui.vertical_centered(|ui| ui.label(RichText::new(tr("Nothing has run yet.", "Noch nichts ausgeführt.")).color(theme::TEXT_FAINT())));
                     }
                     for j in self.jobs.iter_mut().rev() {
+                        if (filter == 1 && j.automatic) || (filter == 2 && !j.automatic) {
+                            continue;
+                        }
                         let st = j.state();
                         let (ic, col) = match st {
-                            JobState::Running => (Icon::Activity, theme::ACCENT),
-                            JobState::Done(0) | JobState::Started => (Icon::Check, theme::GREEN),
-                            _ => (Icon::Warning, theme::RED),
+                            JobState::Running => (Icon::Activity, theme::ACCENT()),
+                            JobState::Done(0) | JobState::Started => (Icon::Check, theme::GREEN()),
+                            _ => (Icon::Warning, theme::RED()),
                         };
                         let dur = j.finished.lock().unwrap().map(|f| f.duration_since(j.started).as_secs_f32()).unwrap_or_else(|| j.started.elapsed().as_secs_f32());
                         let resp = ui
@@ -573,12 +633,12 @@ impl App {
                                 ui.vertical(|ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new(&j.title).font(FontId::new(13.0, theme::semibold())));
-                                        ui.label(RichText::new(format!("{dur:.1}s")).size(11.0).color(theme::TEXT_FAINT));
+                                        ui.label(RichText::new(format!("{dur:.1}s")).size(11.0).color(theme::TEXT_FAINT()));
                                         if st == JobState::Running && ui.small_button(tr("Cancel", "Abbrechen")).clicked() {
                                             j.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                         }
                                     });
-                                    ui.label(RichText::new(j.display.lines().next().unwrap_or("")).monospace().size(11.0).color(theme::TEXT_DIM));
+                                    ui.label(RichText::new(j.display.lines().next().unwrap_or("")).monospace().size(11.0).color(theme::TEXT_DIM()));
                                 });
                             })
                             .response
@@ -614,7 +674,7 @@ impl App {
             .show(ctx, |ui| {
                 egui::Panel::bottom("console_input").frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 6, bottom: 0 })).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("git").monospace().color(theme::TEXT_DIM));
+                        ui.label(RichText::new("git").monospace().color(theme::TEXT_DIM()));
                         let resp = ui.add(egui::TextEdit::singleline(&mut self.console).hint_text("status").desired_width(ui.available_width() - 70.0).font(egui::TextStyle::Monospace));
                         if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             run = true;
@@ -626,10 +686,10 @@ impl App {
                     });
                 });
                 egui::ScrollArea::vertical().auto_shrink([false; 2]).stick_to_bottom(true).show(ui, |ui| {
-                    egui::Frame::new().fill(Color32::from_rgb(0x1c, 0x1c, 0x1c)).inner_margin(8).corner_radius(4).show(ui, |ui| {
+                    egui::Frame::new().fill(theme::dk(0x1c, 0x1c, 0x1c)).inner_margin(8).corner_radius(4).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         if self.console_jobs.is_empty() {
-                            ui.label(RichText::new(tr("Type a Git command below, e.g. \"log --oneline -10\".", "Unten einen Git-Befehl eingeben, z.B. „log --oneline -10“.")).size(12.0).color(theme::TEXT_FAINT));
+                            ui.label(RichText::new(tr("Type a Git command below, e.g. \"log --oneline -10\".", "Unten einen Git-Befehl eingeben, z.B. „log --oneline -10“.")).size(12.0).color(theme::TEXT_FAINT()));
                         }
                         for id in &self.console_jobs {
                             if let Some(j) = self.jobs.iter().find(|j| j.id == *id) {
@@ -662,9 +722,9 @@ impl App {
 
 fn danger_dot(p: &egui::Painter, pos: egui::Pos2, d: Danger) {
     let col = match d {
-        Danger::Read => theme::GREEN,
-        Danger::Change => theme::ACCENT,
-        Danger::Risky => theme::ORANGE,
+        Danger::Read => theme::GREEN(),
+        Danger::Change => theme::ACCENT(),
+        Danger::Risky => theme::ORANGE(),
     };
     p.circle_filled(pos, 3.5, col);
 }
@@ -685,11 +745,11 @@ impl App {
             .resizable(true)
             .default_size(310.0)
             .min_size(240.0)
-            .frame(egui::Frame::new().fill(theme::PANEL_DARK).inner_margin(egui::Margin { left: 8, right: 8, top: 10, bottom: 6 }))
+            .frame(egui::Frame::new().fill(theme::PANEL_DARK()).inner_margin(egui::Margin { left: 8, right: 8, top: 10, bottom: 6 }))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(tr("Git Commands", "Git-Befehle")).font(FontId::new(14.0, theme::semibold())).color(theme::TEXT_STRONG));
-                    ui.label(RichText::new(self.cmds.len().to_string()).size(11.5).color(theme::TEXT_FAINT));
+                    ui.label(RichText::new(tr("Git Commands", "Git-Befehle")).font(FontId::new(14.0, theme::semibold())).color(theme::TEXT_STRONG()));
+                    ui.label(RichText::new(self.cmds.len().to_string()).size(11.5).color(theme::TEXT_FAINT()));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if icon_button(ui, Icon::Close, tr("Close (back to the repository)", "Schließen (zurück zum Repository)")).clicked() {
                             acts.push(super::Act::Commands(false));
@@ -709,7 +769,7 @@ impl App {
                             Danger::Change => tr("changes", "ändert"),
                             Danger::Risky => tr("risky", "riskant"),
                         };
-                        ui.label(RichText::new(l).size(11.0).color(theme::TEXT_FAINT)).on_hover_text(danger_text(d));
+                        ui.label(RichText::new(l).size(11.0).color(theme::TEXT_FAINT())).on_hover_text(danger_text(d));
                         ui.add_space(6.0);
                     }
                 });
@@ -736,11 +796,11 @@ impl App {
                         let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), egui::Sense::click());
                         let p = ui.painter_at(rect);
                         if resp.hovered() {
-                            p.rect_filled(rect, 3, theme::ROW_HOVER);
+                            p.rect_filled(rect, 3, theme::ROW_HOVER());
                         }
-                        crate::icons::draw(&p, egui::Rect::from_center_size(egui::pos2(rect.left() + 8.0, rect.center().y), Vec2::splat(9.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, theme::TEXT_DIM);
-                        p.text(egui::pos2(rect.left() + 20.0, rect.center().y), Align2::LEFT_CENTER, c(name).to_uppercase(), FontId::new(11.0, theme::semibold()), theme::TEXT_DIM);
-                        p.text(egui::pos2(rect.right() - 6.0, rect.center().y), Align2::RIGHT_CENTER, items.len().to_string(), FontId::proportional(11.0), theme::TEXT_FAINT);
+                        crate::icons::draw(&p, egui::Rect::from_center_size(egui::pos2(rect.left() + 8.0, rect.center().y), Vec2::splat(9.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, theme::TEXT_DIM());
+                        p.text(egui::pos2(rect.left() + 20.0, rect.center().y), Align2::LEFT_CENTER, c(name).to_uppercase(), FontId::new(11.0, theme::semibold()), theme::TEXT_DIM());
+                        p.text(egui::pos2(rect.right() - 6.0, rect.center().y), Align2::RIGHT_CENTER, items.len().to_string(), FontId::proportional(11.0), theme::TEXT_FAINT());
                         let resp = resp.on_hover_text(c(about));
                         if resp.clicked() && q.is_empty() {
                             ctx.data_mut(|d| d.insert_temp(key, !stored));
@@ -754,12 +814,12 @@ impl App {
                             let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), egui::Sense::click());
                             let p = ui.painter_at(rect);
                             if is_sel {
-                                p.rect_filled(rect, 3, theme::ROW_SEL);
+                                p.rect_filled(rect, 3, theme::ROW_SEL());
                             } else if resp.hovered() {
-                                p.rect_filled(rect, 3, theme::ROW_HOVER);
+                                p.rect_filled(rect, 3, theme::ROW_HOVER());
                             }
                             danger_dot(&p, egui::pos2(rect.left() + 22.0, rect.center().y), cmd.danger);
-                            p.text(egui::pos2(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, c(cmd.title), FontId::proportional(12.5), if is_sel { theme::TEXT_STRONG } else { theme::TEXT });
+                            p.text(egui::pos2(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, c(cmd.title), FontId::proportional(12.5), if is_sel { theme::TEXT_STRONG() } else { theme::TEXT() });
                             if resp.on_hover_text(c(cmd.summary)).clicked() {
                                 pick = Some(i);
                             }
@@ -775,12 +835,12 @@ impl App {
         }
 
         let sug = Suggest::from(self.tabs.get(self.active));
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin { left: 28, right: 20, top: 18, bottom: 10 })).show(ui, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL()).inner_margin(egui::Margin { left: 28, right: 20, top: 18, bottom: 10 })).show(ui, |ui| {
             let Some(mut f) = self.lib_form.take() else {
                 ui.add_space(80.0);
                 ui.vertical_centered(|ui| {
-                    icon(ui, Icon::Cube, 40.0, theme::TEXT_FAINT);
-                    ui.label(RichText::new(tr("Pick a command on the left to see what it does.", "Wähle links einen Befehl, um zu sehen, was er tut.")).color(theme::TEXT_DIM));
+                    icon(ui, Icon::Cube, 40.0, theme::TEXT_FAINT());
+                    ui.label(RichText::new(tr("Pick a command on the left to see what it does.", "Wähle links einen Befehl, um zu sehen, was er tut.")).color(theme::TEXT_DIM()));
                 });
                 return;
             };
@@ -790,32 +850,32 @@ impl App {
             let mut act = FormAction::None;
             egui::ScrollArea::vertical().id_salt("cmdlib_detail").auto_shrink([false; 2]).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(c(cmd.title)).font(FontId::new(18.0, theme::semibold())).color(theme::TEXT_STRONG));
+                    ui.label(RichText::new(c(cmd.title)).font(FontId::new(18.0, theme::semibold())).color(theme::TEXT_STRONG()));
                     ui.add_space(6.0);
                     let (r, _) = ui.allocate_exact_size(Vec2::new(8.0, 18.0), egui::Sense::hover());
                     danger_dot(ui.painter(), r.center(), cmd.danger);
-                    ui.label(RichText::new(danger_text(cmd.danger)).size(11.5).color(theme::TEXT_FAINT));
+                    ui.label(RichText::new(danger_text(cmd.danger)).size(11.5).color(theme::TEXT_FAINT()));
                 });
-                ui.label(RichText::new(c(CATS.iter().find(|x| x.0 == cmd.cat).map(|x| x.1).unwrap_or(""))).size(11.5).color(theme::TEXT_FAINT));
+                ui.label(RichText::new(c(CATS.iter().find(|x| x.0 == cmd.cat).map(|x| x.1).unwrap_or(""))).size(11.5).color(theme::TEXT_FAINT()));
                 ui.add_space(12.0);
                 // What will run, part by part.
-                egui::Frame::new().fill(theme::PANEL_DARK).stroke(Stroke::new(1.0, theme::LINE)).corner_radius(5).inner_margin(12).show(ui, |ui| {
+                egui::Frame::new().fill(theme::PANEL_DARK()).stroke(Stroke::new(1.0, theme::LINE())).corner_radius(5).inner_margin(12).show(ui, |ui| {
                     ui.set_width(ui.available_width().min(620.0));
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(tr("What runs", "Was ausgeführt wird")).size(11.0).color(theme::TEXT_FAINT));
+                        ui.label(RichText::new(tr("What runs", "Was ausgeführt wird")).size(11.0).color(theme::TEXT_FAINT()));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(egui::Button::new(RichText::new(tr("Copy", "Kopieren")).size(11.5).color(theme::TEXT_DIM)).frame(false)).clicked() {
+                            if ui.add(egui::Button::new(RichText::new(tr("Copy", "Kopieren")).size(11.5).color(theme::TEXT_DIM())).frame(false)).clicked() {
                                 ctx.copy_text(line.clone());
                             }
                         });
                     });
-                    ui.add(egui::Label::new(RichText::new(&line).monospace().size(13.0).color(theme::TEXT_STRONG)).wrap());
+                    ui.add(egui::Label::new(RichText::new(&line).monospace().size(13.0).color(theme::TEXT_STRONG())).wrap());
                     if !args.is_empty() {
                         ui.add_space(6.0);
                         egui::Grid::new("cmdlib_explain").num_columns(2).spacing([14.0, 3.0]).show(ui, |ui| {
                             for a in &args {
-                                ui.label(RichText::new(catalog::quote_for_display(a.text.trim_start_matches('!'))).monospace().size(11.5).color(theme::ACCENT));
-                                ui.add(egui::Label::new(RichText::new(&a.help).size(12.0).color(theme::TEXT_DIM)).wrap());
+                                ui.label(RichText::new(catalog::quote_for_display(a.text.trim_start_matches('!'))).monospace().size(11.5).color(theme::ACCENT()));
+                                ui.add(egui::Label::new(RichText::new(&a.help).size(12.0).color(theme::TEXT_DIM())).wrap());
                                 ui.end_row();
                             }
                         });

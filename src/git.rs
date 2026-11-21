@@ -307,23 +307,43 @@ pub fn find_toplevel(dir: &Path) -> Option<PathBuf> {
 /// Reference namespaces that "all commits" leaves out.
 pub const HIDDEN_REF_PREFIXES: [&str; 3] = ["refs/bisect/", "refs/worktree/", "refs/rewritten/"];
 
-/// Which tips the history starts from: every reference when `all` is set (else HEAD);
-/// `reflog` adds the commits the reflogs mention.
-#[derive(Clone, Copy)]
+/// Which tips the history starts from: the reference in `only` if set, otherwise every
+/// reference when `all` is set (else HEAD); `reflog` adds the commits the reflogs mention.
+#[derive(Clone, Default)]
 pub struct LogOptions {
     pub all: bool,
     pub hide_stashes: bool,
     pub reflog: bool,
+    /// View > Collapse All Merges (Show First Parent)
+    pub first_parent: bool,
+    /// Only the history of this reference (View > Filter by Active Branch uses "HEAD";
+    /// the funnel button on a branch in the sidebar uses the branch).
+    pub only: Option<String>,
+    /// Branches hidden from the history (eye button in the sidebar).
+    pub hidden: Vec<String>,
+    /// Labels only: hide tags in the commit list.
+    pub hide_tags: bool,
+    /// Preferences > Sort commits: topologically instead of by date.
+    pub topo: bool,
 }
 
-pub fn log_tip_args(o: LogOptions) -> Vec<String> {
+pub fn log_tip_args(o: &LogOptions) -> Vec<String> {
     let mut v = Vec::new();
-    if o.all {
+    if o.first_parent {
+        v.push("--first-parent".into());
+    }
+    if let Some(r) = &o.only {
+        v.push(r.clone());
+    } else if o.all {
         for p in HIDDEN_REF_PREFIXES {
             v.push(format!("--exclude={p}*"));
         }
         if o.hide_stashes {
             v.push("--exclude=refs/stash".into());
+        }
+        for h in &o.hidden {
+            v.push(format!("--exclude=refs/heads/{h}"));
+            v.push(format!("--exclude=refs/remotes/{h}"));
         }
         v.push("--all".into());
     }
@@ -333,11 +353,12 @@ pub fn log_tip_args(o: LogOptions) -> Vec<String> {
     v
 }
 
-pub fn load_commits(dir: &Path, limit: usize, opts: LogOptions) -> Vec<Commit> {
+pub fn load_commits(dir: &Path, limit: usize, opts: &LogOptions) -> Vec<Commit> {
     let fmt = "--format=%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1f%s%x1e";
     let n = format!("-n{limit}");
     let tips = log_tip_args(opts);
-    let mut args = vec!["log", "--date-order", fmt, "--date=format:%d.%m.%Y %H:%M", n.as_str()];
+    let order = if opts.topo { "--topo-order" } else { "--date-order" };
+    let mut args = vec!["log", order, fmt, "--date=format:%d.%m.%Y %H:%M", n.as_str()];
     args.extend(tips.iter().map(|s| s.as_str()));
     let o = run(dir, &args);
     let mut out = Vec::new();

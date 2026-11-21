@@ -32,6 +32,12 @@ pub enum Icon {
     ChevronDown,
     ChevronRight,
     Lock,
+    Sidebar,
+    Theme,
+    Pin,
+    Eye,
+    Filter,
+    Chart,
 }
 
 fn line(p: &Painter, a: Pos2, b: Pos2, s: Stroke) {
@@ -53,6 +59,42 @@ pub fn draw(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
     let at = |x: f32, y: f32| pos2(o.x + x * k, o.y + y * k);
     let s = Stroke::new((1.35 * k).max(1.0), color);
     match icon {
+        Icon::Sidebar => {
+            p.rect_stroke(Rect::from_min_max(at(1.5, 2.5), at(14.5, 13.5)), 1.5 * k, s, eframe::egui::StrokeKind::Middle);
+            line(p, at(6.0, 2.5), at(6.0, 13.5), s);
+            line(p, at(3.0, 5.5), at(4.6, 5.5), s);
+            line(p, at(3.0, 8.0), at(4.6, 8.0), s);
+        }
+        Icon::Theme => {
+            p.circle_stroke(at(8.0, 8.0), 5.5 * k, s);
+            let pts: Vec<Pos2> = (0..=16).map(|i| { let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / 16.0; at(8.0 + 5.5 * a.cos(), 8.0 + 5.5 * a.sin()) }).collect();
+            let mut poly = pts.clone();
+            poly.push(at(8.0, 8.0));
+            p.add(Shape::convex_polygon(poly, color, Stroke::NONE));
+        }
+        Icon::Pin => {
+            line(p, at(8.0, 9.5), at(8.0, 14.5), s);
+            p.rect_stroke(Rect::from_min_max(at(5.0, 2.0), at(11.0, 6.5)), 1.0 * k, s, eframe::egui::StrokeKind::Middle);
+            line(p, at(3.5, 9.5), at(12.5, 9.5), s);
+            line(p, at(5.5, 6.5), at(4.5, 9.5), s);
+            line(p, at(10.5, 6.5), at(11.5, 9.5), s);
+        }
+        Icon::Eye => {
+            let up: Vec<Pos2> = (0..=16).map(|i| { let t = i as f32 / 16.0; at(1.5 + 13.0 * t, 8.0 - 4.5 * (std::f32::consts::PI * t).sin()) }).collect();
+            let dn: Vec<Pos2> = (0..=16).map(|i| { let t = i as f32 / 16.0; at(1.5 + 13.0 * t, 8.0 + 4.5 * (std::f32::consts::PI * t).sin()) }).collect();
+            p.add(Shape::line(up, s));
+            p.add(Shape::line(dn, s));
+            p.circle_stroke(at(8.0, 8.0), 2.0 * k, s);
+        }
+        Icon::Filter => {
+            p.add(Shape::line(vec![at(2.0, 3.0), at(14.0, 3.0), at(9.5, 8.5), at(9.5, 13.5), at(6.5, 12.0), at(6.5, 8.5), at(2.0, 3.0)], s));
+        }
+        Icon::Chart => {
+            line(p, at(2.0, 14.0), at(14.0, 14.0), s);
+            line(p, at(4.0, 14.0), at(4.0, 9.0), Stroke::new(s.width * 1.6, color));
+            line(p, at(8.0, 14.0), at(8.0, 4.0), Stroke::new(s.width * 1.6, color));
+            line(p, at(12.0, 14.0), at(12.0, 7.0), Stroke::new(s.width * 1.6, color));
+        }
         Icon::Search => {
             p.circle_stroke(at(6.8, 6.8), 4.3 * k, s);
             line(p, at(10.0, 10.0), at(14.0, 14.0), Stroke::new(s.width * 1.3, color));

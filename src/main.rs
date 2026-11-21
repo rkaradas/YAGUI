@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod appicon;
 mod catalog;
 mod catalog_en;
 mod git;
@@ -26,6 +27,7 @@ fn main() -> eframe::Result<()> {
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("YAGUI")
+        .with_icon(std::sync::Arc::new(eframe::egui::IconData { rgba: appicon::icon_pixels(64), width: 64, height: 64 }))
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([900.0, 560.0]);
     if screenshot.is_some() {

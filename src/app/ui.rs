@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use eframe::egui::{self, Align, Align2, Color32, FontId, Id, Layout, RichText, Sense, Stroke, Vec2};
 
 use super::tree::{self, Row};
-use super::{Act, App, DetailTab, Repo, View};
+use super::{Act, App, DetailTab, Repo, View, ViewOpt};
 use crate::catalog::{self, CATS};
 use crate::git::{self, FileStatus, JobState};
 use crate::i18n::{self, Lang, c, tr, trs};
@@ -27,9 +27,9 @@ pub(super) fn icon(ui: &mut egui::Ui, i: Icon, size: f32, color: Color32) -> egu
 pub(super) fn icon_button(ui: &mut egui::Ui, i: Icon, tip: &str) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
     if resp.hovered() {
-        ui.painter().rect_filled(rect, 4, Color32::from_rgb(0x3a, 0x3a, 0x3d));
+        ui.painter().rect_filled(rect, 4, theme::dk(0x3a, 0x3a, 0x3d));
     }
-    icons::draw(ui.painter(), rect.shrink(4.0), i, if resp.hovered() { theme::TEXT_STRONG } else { theme::TEXT_DIM });
+    icons::draw(ui.painter(), rect.shrink(4.0), i, if resp.hovered() { theme::TEXT_STRONG() } else { theme::TEXT_DIM() });
     resp.on_hover_text(tip)
 }
 
@@ -42,38 +42,38 @@ pub(super) fn tip_with_cmd(resp: egui::Response, what: &str, cmd: &str) -> egui:
         ui.label(&what);
         if !cmd.is_empty() {
             ui.add_space(2.0);
-            ui.label(RichText::new(&cmd).monospace().size(11.0).color(theme::TEXT_DIM));
+            ui.label(RichText::new(&cmd).monospace().size(11.0).color(theme::TEXT_DIM()));
         }
     })
 }
 
 fn tool_button(ui: &mut egui::Ui, i: Icon, label: &str, what: &str, cmd: &str, enabled: bool) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(11.5), theme::TEXT);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(11.5), theme::TEXT());
     let w = (galley.size().x + 16.0).max(46.0);
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 46.0), if enabled { Sense::click() } else { Sense::hover() });
     let p = ui.painter_at(rect);
     if enabled && resp.hovered() {
-        p.rect_filled(rect.shrink2(Vec2::new(1.0, 3.0)), 5, Color32::from_rgb(0x30, 0x30, 0x33));
+        p.rect_filled(rect.shrink2(Vec2::new(1.0, 3.0)), 5, theme::dk(0x30, 0x30, 0x33));
     }
-    let col = if !enabled { theme::TEXT_FAINT } else if resp.hovered() { theme::TEXT_STRONG } else { theme::TEXT };
+    let col = if !enabled { theme::TEXT_FAINT() } else if resp.hovered() { theme::TEXT_STRONG() } else { theme::TEXT() };
     let ir = egui::Rect::from_center_size(rect.center_top() + Vec2::new(0.0, 15.0), Vec2::splat(18.0));
     icons::draw(&p, ir, i, col);
-    p.text(rect.center_bottom() - Vec2::new(0.0, 10.0), Align2::CENTER_CENTER, label, FontId::proportional(11.5), if enabled { theme::TEXT_DIM } else { theme::TEXT_FAINT });
+    p.text(rect.center_bottom() - Vec2::new(0.0, 10.0), Align2::CENTER_CENTER, label, FontId::proportional(11.5), if enabled { theme::TEXT_DIM() } else { theme::TEXT_FAINT() });
     tip_with_cmd(resp, what, cmd)
 }
 
 fn separator_v(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(13.0, 30.0), Sense::hover());
-    ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, theme::LINE));
+    ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, theme::LINE()));
 }
 
 pub(super) fn status_color(c: char) -> Color32 {
     match c {
-        'A' | '?' => theme::GREEN,
-        'D' => theme::RED,
-        'R' | 'C' => theme::ACCENT,
-        'U' => theme::ORANGE,
-        _ => theme::YELLOW,
+        'A' | '?' => theme::GREEN(),
+        'D' => theme::RED(),
+        'R' | 'C' => theme::ACCENT(),
+        'U' => theme::ORANGE(),
+        _ => theme::YELLOW(),
     }
 }
 
@@ -126,41 +126,45 @@ fn list_row(ui: &mut egui::Ui, ic: Option<Icon>, text: &str, strong: bool, right
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::click());
     let p = ui.painter_at(rect);
     if selected {
-        p.rect_filled(rect, 4, theme::ROW_SEL);
+        p.rect_filled(rect, 4, theme::ROW_SEL());
     } else if resp.hovered() {
-        p.rect_filled(rect, 4, theme::ROW_HOVER);
+        p.rect_filled(rect, 4, theme::ROW_HOVER());
     }
     let mut x = rect.left() + 8.0 + indent;
     if let Some(i) = ic {
-        icons::draw(&p, egui::Rect::from_center_size(egui::pos2(x + 7.0, rect.center().y), Vec2::splat(14.0)), i, if selected { theme::TEXT_STRONG } else { theme::TEXT_DIM });
+        icons::draw(&p, egui::Rect::from_center_size(egui::pos2(x + 7.0, rect.center().y), Vec2::splat(14.0)), i, if selected { theme::TEXT_STRONG() } else { theme::TEXT_DIM() });
         x += 22.0;
     }
     let font = if strong { FontId::new(13.0, theme::semibold()) } else { FontId::proportional(13.0) };
-    let right_w = if right.is_empty() { 0.0 } else { p.layout_no_wrap(right.to_string(), FontId::proportional(11.5), theme::TEXT_DIM).size().x + 16.0 };
+    let right_w = if right.is_empty() { 0.0 } else { p.layout_no_wrap(right.to_string(), FontId::proportional(11.5), theme::TEXT_DIM()).size().x + 16.0 };
     let clip = egui::Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(rect.right() - right_w, rect.bottom()));
-    ui.painter_at(clip).text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, text, font, if selected || strong { theme::TEXT_STRONG } else { theme::TEXT });
+    ui.painter_at(clip).text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, text, font, if selected || strong { theme::TEXT_STRONG() } else { theme::TEXT() });
     if !right.is_empty() {
-        p.text(egui::pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, right, FontId::proportional(11.5), theme::TEXT_DIM);
+        p.text(egui::pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, right, FontId::proportional(11.5), theme::TEXT_DIM());
     }
     resp
 }
 
 /// A collapsible sidebar section header, open state kept in egui memory.
 fn section(ui: &mut egui::Ui, id: &str, title: &str, count: usize, default_open: bool) -> bool {
+    section_r(ui, id, title, count, default_open).0
+}
+
+fn section_r(ui: &mut egui::Ui, id: &str, title: &str, count: usize, default_open: bool) -> (bool, egui::Response) {
     let key = Id::unique(("sec", id));
     let open = ui.ctx().data_mut(|d| *d.get_temp_mut_or_insert_with(key, || default_open));
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
     let p = ui.painter_at(rect);
     let ir = egui::Rect::from_center_size(egui::pos2(rect.left() + 10.0, rect.center().y), Vec2::splat(12.0));
-    icons::draw(&p, ir, if open { Icon::ChevronDown } else { Icon::ChevronRight }, theme::TEXT_DIM);
-    p.text(egui::pos2(rect.left() + 22.0, rect.center().y), Align2::LEFT_CENTER, title, FontId::new(13.0, theme::semibold()), if resp.hovered() { theme::TEXT_STRONG } else { theme::TEXT });
+    icons::draw(&p, ir, if open { Icon::ChevronDown } else { Icon::ChevronRight }, theme::TEXT_DIM());
+    p.text(egui::pos2(rect.left() + 22.0, rect.center().y), Align2::LEFT_CENTER, title, FontId::new(13.0, theme::semibold()), if resp.hovered() { theme::TEXT_STRONG() } else { theme::TEXT() });
     if count > 0 {
-        p.text(egui::pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, count.to_string(), FontId::proportional(11.5), theme::TEXT_FAINT);
+        p.text(egui::pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, count.to_string(), FontId::proportional(11.5), theme::TEXT_FAINT());
     }
     if resp.clicked() {
         ui.ctx().data_mut(|d| d.insert_temp(key, !open));
     }
-    open
+    (open, resp)
 }
 
 fn pill(ui: &mut egui::Ui, text: &str, fill: Color32, fg: Color32) {
@@ -198,7 +202,7 @@ pub(super) fn diff_facts(ui: &mut egui::Ui, pd: &git::ParsedDiff) {
     ui.horizontal_wrapped(|ui| {
         for f in &pd.facts {
             let txt = if i18n::is_de() { f.clone() } else { fact_en(f) };
-            pill(ui, &txt, Color32::from_rgb(0x2c, 0x37, 0x46), Color32::from_rgb(0xb4, 0xcf, 0xee));
+            pill(ui, &txt, theme::dk(0x2c, 0x37, 0x46), Color32::from_rgb(0xb4, 0xcf, 0xee));
         }
     });
     ui.add_space(4.0);
@@ -230,10 +234,11 @@ fn fact_en(f: &str) -> String {
 pub(super) fn diff_body(ui: &mut egui::Ui, text: &str) {
     if text.trim().is_empty() {
         ui.add_space(8.0);
-        ui.label(RichText::new(tr("No textual changes.", "Keine Textänderungen.")).color(theme::TEXT_DIM));
+        ui.label(RichText::new(tr("No textual changes.", "Keine Textänderungen.")).color(theme::TEXT_DIM()));
         return;
     }
-    let font = FontId::monospace(12.5);
+    let font = FontId::monospace(super::extra::diff_font_size());
+    let tabs = " ".repeat(super::extra::tab_width());
     let w = ui.available_width().max(700.0);
     let num_w = 38.0;
     let (mut old, mut new) = (0u32, 0u32);
@@ -249,34 +254,34 @@ pub(super) fn diff_body(ui: &mut egui::Ui, text: &str) {
             continue; // the file header is summarised by diff_facts
         }
         let (bg, fg, on, nn) = if line.starts_with("@@") {
-            (theme::DIFF_HUNK, Color32::from_rgb(0x8f, 0xa9, 0xc7), None, None)
+            (theme::DIFF_HUNK(), if theme::is_light() { Color32::from_rgb(0x3a, 0x5a, 0x86) } else { Color32::from_rgb(0x8f, 0xa9, 0xc7) }, None, None)
         } else if line.starts_with('+') {
             new += 1;
-            (theme::DIFF_ADD, Color32::from_rgb(0xc4, 0xe8, 0xc9), None, Some(new - 1))
+            (theme::DIFF_ADD(), if theme::is_light() { Color32::from_rgb(0x1d, 0x5e, 0x2a) } else { Color32::from_rgb(0xc4, 0xe8, 0xc9) }, None, Some(new - 1))
         } else if line.starts_with('-') {
             old += 1;
-            (theme::DIFF_DEL, Color32::from_rgb(0xf0, 0xc0, 0xc0), Some(old - 1), None)
+            (theme::DIFF_DEL(), if theme::is_light() { Color32::from_rgb(0x8a, 0x1f, 0x1f) } else { Color32::from_rgb(0xf0, 0xc0, 0xc0) }, Some(old - 1), None)
         } else if line.starts_with('\\') {
-            (Color32::TRANSPARENT, theme::TEXT_FAINT, None, None)
+            (Color32::TRANSPARENT, theme::TEXT_FAINT(), None, None)
         } else {
             old += 1;
             new += 1;
-            (Color32::TRANSPARENT, theme::TEXT, Some(old - 1), Some(new - 1))
+            (Color32::TRANSPARENT, theme::TEXT(), Some(old - 1), Some(new - 1))
         };
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 18.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(w, (font.size + 5.5).max(16.0)), Sense::hover());
         let p = ui.painter();
         if bg != Color32::TRANSPARENT {
             p.rect_filled(rect, 0, bg);
         }
-        let numcol = theme::TEXT_FAINT;
+        let numcol = theme::TEXT_FAINT();
         if let Some(o) = on {
             p.text(egui::pos2(rect.left() + num_w - 4.0, rect.center().y), Align2::RIGHT_CENTER, o.to_string(), FontId::monospace(11.0), numcol);
         }
         if let Some(n) = nn {
             p.text(egui::pos2(rect.left() + 2.0 * num_w - 4.0, rect.center().y), Align2::RIGHT_CENTER, n.to_string(), FontId::monospace(11.0), numcol);
         }
-        p.line_segment([egui::pos2(rect.left() + 2.0 * num_w + 2.0, rect.top()), egui::pos2(rect.left() + 2.0 * num_w + 2.0, rect.bottom())], Stroke::new(1.0, theme::LINE));
-        p.text(egui::pos2(rect.left() + 2.0 * num_w + 10.0, rect.center().y), Align2::LEFT_CENTER, line.replace('\t', "    "), font.clone(), fg);
+        p.line_segment([egui::pos2(rect.left() + 2.0 * num_w + 2.0, rect.top()), egui::pos2(rect.left() + 2.0 * num_w + 2.0, rect.bottom())], Stroke::new(1.0, theme::LINE()));
+        p.text(egui::pos2(rect.left() + 2.0 * num_w + 10.0, rect.center().y), Align2::LEFT_CENTER, line.replace('\t', &tabs), font.clone(), fg);
     }
 }
 
@@ -300,16 +305,19 @@ pub(super) fn diff_view(ui: &mut egui::Ui, text: &str, id: &str) {
 impl App {
     pub(super) fn menu_bar(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         let has = !self.tabs.is_empty();
-        egui::Panel::top("menu").frame(egui::Frame::new().fill(theme::TOOLBAR).inner_margin(egui::Margin::symmetric(6, 2))).show(ui, |ui| {
+        egui::Panel::top("menu").frame(egui::Frame::new().fill(theme::TOOLBAR()).inner_margin(egui::Margin::symmetric(6, 2))).show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
+                // File – repositories, tabs, sign-in and preferences.
                 ui.menu_button(tr("File", "Datei"), |ui| {
-                    menu_item(ui, acts, tr("Open Repository…", "Repository öffnen…"), Act::OpenRepoDialog);
-                    menu_cmd(ui, &self.cmds, acts, "clone", Some(tr("Clone Repository…", "Repository klonen…")), vec![]);
-                    menu_cmd(ui, &self.cmds, acts, "init", Some(tr("New Repository…", "Neues Repository…")), vec![]);
+                    menu_cmd(ui, &self.cmds, acts, "init", Some(tr("Init New Repository…", "Neues Repository anlegen…")), vec![]);
+                    menu_cmd(ui, &self.cmds, acts, "clone", Some(tr("Clone…", "Klonen…")), vec![]);
                     ui.separator();
+                    menu_item(ui, acts, tr("New Tab   Ctrl+T", "Neuer Tab   Strg+T"), Act::Manager);
+                    menu_item(ui, acts, tr("Open Repository…   Ctrl+O", "Repository öffnen…   Strg+O"), Act::OpenRepoDialog);
+                    menu_item(ui, acts, tr("Quick Launch…   Ctrl+P", "Schnellstart…   Strg+P"), Act::QuickLaunch);
                     ui.menu_button(tr("Recent", "Zuletzt geöffnet"), |ui| {
                         if self.recent.is_empty() {
-                            ui.label(RichText::new(tr("Nothing yet", "Noch nichts")).color(theme::TEXT_DIM));
+                            ui.label(RichText::new(tr("Nothing yet", "Noch nichts")).color(theme::TEXT_DIM()));
                         }
                         for r in self.recent.clone() {
                             if ui.button(&r).clicked() {
@@ -319,46 +327,115 @@ impl App {
                         }
                     });
                     ui.separator();
+                    ui.add_enabled_ui(has, |ui| menu_item(ui, acts, tr("Close Tab   Ctrl+W", "Tab schließen   Strg+W"), Act::CloseTab(self.active)));
+                    ui.add_enabled_ui(!self.closed_tabs.is_empty(), |ui| menu_item(ui, acts, tr("Restore Closed Tab   Ctrl+Shift+T", "Geschlossenen Tab wiederherstellen   Strg+Umschalt+T"), Act::RestoreTab));
+                    ui.separator();
                     menu_item(ui, acts, tr("Configure SSH Keys…", "SSH-Schlüssel einrichten…"), Act::Ssh);
                     menu_item(ui, acts, tr("Accounts…", "Konten…"), Act::Accounts);
                     ui.separator();
-                    menu_item(ui, acts, tr("Preferences…", "Einstellungen…"), Act::Prefs);
+                    menu_item(ui, acts, tr("Preferences…   Ctrl+,", "Einstellungen…   Strg+,"), Act::Prefs);
                     ui.separator();
                     if ui.button(tr("Exit", "Beenden")).clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
-                ui.menu_button(tr("Repository", "Repository"), |ui| {
+                // View – what the history shows.
+                ui.menu_button(tr("View", "Ansicht"), |ui| {
                     ui.add_enabled_ui(has, |ui| {
-                        menu_cmd(ui, &self.cmds, acts, "fetch", None, vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "pull", None, vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "push", None, vec![]);
+                        menu_item(ui, acts, tr("Show Uncommitted Changes   Ctrl+1", "Lokale Änderungen zeigen   Strg+1"), Act::View(View::Changes));
+                        menu_item(ui, acts, tr("Show All Commits   Ctrl+2", "Alle Commits zeigen   Strg+2"), Act::View(View::Commits));
                         ui.separator();
-                        menu_cmd(ui, &self.cmds, acts, "switch_create", None, vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "merge", None, vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "rebase", None, vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "tag_create", None, vec![]);
-                        ui.separator();
-                        menu_cmd(ui, &self.cmds, acts, "stash_push", None, vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "stash_pop", None, vec![]);
-                        ui.separator();
-                        menu_cmd(ui, &self.cmds, acts, "remote_add", None, vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "submodule_add", None, vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "worktree_add", None, vec![]);
-                        ui.separator();
-                        menu_item(ui, acts, tr("Refresh  (F5)", "Neu laden  (F5)"), Act::Refresh);
-                        if let Some(r) = self.tabs.get(self.active) {
-                            let p = r.path.clone();
-                            menu_item(ui, acts, tr("Open in File Explorer   Ctrl+Alt+O", "Im Datei-Explorer öffnen   Strg+Alt+O"), Act::Explorer(p));
+                        let o = self.tabs.get(self.active).map(|r| r.log_opts.clone()).unwrap_or_default();
+                        let check = |ui: &mut egui::Ui, on: bool, label: &str, help: &str, opt: ViewOpt, acts: &mut Vec<Act>| {
+                            let mut v = on;
+                            if ui.checkbox(&mut v, label).on_hover_text(help).clicked() {
+                                acts.push(Act::ViewOpt(opt));
+                                ui.close();
+                            }
+                        };
+                        check(ui, self.hide_details, tr("Hide Commit Details", "Commit-Details ausblenden"), tr("More room for the commit list", "Mehr Platz für die Commit-Liste"), ViewOpt::Details, acts);
+                        if ui.button(tr("Show HEAD   Ctrl+H", "HEAD zeigen   Strg+H")).on_hover_text(tr("Jump to the commit you are on", "Springt zum aktuellen Commit")).clicked() {
+                            acts.push(Act::ViewOpt(ViewOpt::Head));
+                            ui.close();
                         }
-                        menu_item(ui, acts, tr("Open in Console   Ctrl+Alt+T", "In Konsole öffnen   Strg+Alt+T"), Act::Terminal);
+                        check(ui, o.hide_tags, tr("Hide Tags", "Tags ausblenden"), tr("No tag labels in the commit list", "Keine Tag-Beschriftungen in der Liste"), ViewOpt::Tags, acts);
+                        check(ui, o.hide_stashes, tr("Hide Stashes in Commit List", "Stashes in der Commit-Liste ausblenden"), "--exclude=refs/stash", ViewOpt::Stashes, acts);
+                        check(ui, o.reflog, tr("Show Lost Commits (Reflog)", "Verlorene Commits zeigen (Reflog)"), "--reflog", ViewOpt::Reflog, acts);
+                        check(ui, o.first_parent, tr("Collapse All Merges (Show First Parent)", "Merges einklappen (nur erster Elternteil)"), "--first-parent", ViewOpt::FirstParent, acts);
+                        check(ui, o.only.as_deref() == Some("HEAD"), tr("Filter by Active Branch", "Nur aktiven Branch zeigen"), tr("Only commits reachable from the current branch", "Nur Commits des aktuellen Branches"), ViewOpt::ActiveBranch, acts);
+                    });
+                    ui.separator();
+                    menu_item(ui, acts, tr("Git Commands", "Git-Befehle"), Act::Commands(true));
+                    menu_item(ui, acts, tr("Activity", "Aktivität"), Act::ToggleActivity);
+                    menu_item(ui, acts, tr("Git Console (type commands)", "Git-Konsole (Befehle eintippen)"), Act::ToggleConsole);
+                    menu_item(ui, acts, tr("Tab List Sidebar", "Tab-Liste an der Seite"), Act::ToggleTabList);
+                    ui.separator();
+                    ui.menu_button(tr("Language", "Sprache"), |ui| {
+                        for (l, name) in [(Lang::En, "English"), (Lang::De, "Deutsch")] {
+                            if ui.selectable_label(self.lang == l, name).clicked() {
+                                acts.push(Act::Lang(l));
+                                ui.close();
+                            }
+                        }
                     });
                 });
-                // Every git command, grouped: the full set stays one click away without
-                // taking space in the window.
+                ui.menu_button(tr("Repository", "Repository"), |ui| {
+                    ui.add_enabled_ui(has, |ui| {
+                        menu_item(ui, acts, tr("Refresh   F5", "Neu laden   F5"), Act::Refresh);
+                        ui.separator();
+                        menu_cmd(ui, &self.cmds, acts, "fetch", Some(tr("Fetch…   Ctrl+Shift+L", "Fetch…   Strg+Umschalt+L")), vec![]);
+                        menu_cmd(ui, &self.cmds, acts, "pull", Some(tr("Pull…   Ctrl+Shift+P", "Pull…   Strg+Umschalt+P")), vec![]);
+                        menu_cmd(ui, &self.cmds, acts, "push", Some(tr("Push…   Ctrl+Shift+U", "Push…   Strg+Umschalt+U")), vec![]);
+                        ui.separator();
+                        menu_cmd(ui, &self.cmds, acts, "stash_push", Some(tr("Save Stash…   Ctrl+Shift+S", "Stash speichern…   Strg+Umschalt+S")), vec![]);
+                        menu_item(ui, acts, tr("New Branch…   Ctrl+Shift+B", "Neuer Branch…   Strg+Umschalt+B"), Act::NewBranch(None));
+                        menu_item(ui, acts, tr("New Tag…", "Neuer Tag…"), Act::NewTag(None));
+                        menu_cmd(ui, &self.cmds, acts, "worktree_add", Some(tr("New Worktree…", "Neuer Worktree…")), vec![]);
+                        ui.separator();
+                        ui.menu_button("Git Flow", |ui| {
+                            for id in ["flow_init", "flow_feature_start", "flow_feature_finish", "flow_feature_publish", "flow_release_start", "flow_release_finish", "flow_hotfix_start", "flow_hotfix_finish"] {
+                                menu_cmd(ui, &self.cmds, acts, id, None, vec![]);
+                            }
+                        });
+                        ui.menu_button("Git LFS", |ui| {
+                            for id in ["lfs_install", "lfs_track", "lfs_untrack", "lfs_ls_files", "lfs_status", "lfs_fetch", "lfs_pull", "lfs_push", "lfs_locks", "lfs_lock", "lfs_unlock", "lfs_prune", "lfs_migrate"] {
+                                menu_cmd(ui, &self.cmds, acts, id, None, vec![]);
+                            }
+                        });
+                        menu_cmd(ui, &self.cmds, acts, "apply", Some(tr("Apply Patch…", "Patch anwenden…")), vec![]);
+                        ui.menu_button("Bisect", |ui| {
+                            for id in ["bisect_start", "bisect_good", "bisect_bad", "bisect_skip", "bisect_run", "bisect_log", "bisect_reset"] {
+                                menu_cmd(ui, &self.cmds, acts, id, None, vec![]);
+                            }
+                        });
+                        ui.separator();
+                        if let Some(r) = self.tabs.get(self.active) {
+                            let p = r.path.clone();
+                            menu_item(ui, acts, tr("Open In File Explorer   Ctrl+Alt+O", "Im Datei-Explorer öffnen   Strg+Alt+O"), Act::Explorer(p));
+                        }
+                        menu_item(ui, acts, tr("Open In Console   Ctrl+Alt+T", "In Konsole öffnen   Strg+Alt+T"), Act::Terminal);
+                        ui.separator();
+                        menu_item(ui, acts, tr("Repository Statistics…", "Repository-Statistik…"), Act::Stats);
+                        menu_item(ui, acts, tr("Repository Treemap…", "Repository-Treemap…"), Act::Treemap);
+                        menu_item(ui, acts, tr("Performance Benchmark…", "Leistungstest…"), Act::Bench);
+                        ui.separator();
+                        menu_item(ui, acts, tr("Settings for This Repository…", "Einstellungen für dieses Repository…"), Act::RepoSettings);
+                    });
+                });
+                // Every git command, grouped: the full set stays one click away.
                 ui.menu_button(tr("Commands", "Befehle"), |ui| {
                     menu_item(ui, acts, tr("Find a command…   Ctrl+Shift+P", "Befehl suchen…   Strg+Umschalt+P"), Act::QuickLaunch);
                     menu_item(ui, acts, tr("Browse all commands…", "Alle Befehle durchsuchen…"), Act::Commands(true));
+                    if !self.custom_cmds.is_empty() {
+                        ui.menu_button(tr("Custom Commands", "Eigene Befehle"), |ui| {
+                            for (i, cc) in self.custom_cmds.iter().enumerate() {
+                                if ui.button(&cc.name).on_hover_text(&cc.command).clicked() {
+                                    acts.push(Act::Custom(i, String::new()));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
                     ui.separator();
                     for (cat, name, _) in CATS {
                         ui.menu_button(c(name), |ui| {
@@ -376,31 +453,31 @@ impl App {
                         });
                     }
                 });
-                ui.menu_button(tr("View", "Ansicht"), |ui| {
-                    ui.add_enabled_ui(has, |ui| {
-                        menu_item(ui, acts, tr("Local Changes", "Lokale Änderungen"), Act::View(View::Changes));
-                        menu_item(ui, acts, tr("All Commits", "Alle Commits"), Act::View(View::Commits));
-                    });
-                    menu_item(ui, acts, tr("Git Commands", "Git-Befehle"), Act::Commands(true));
+                ui.menu_button(tr("Window", "Fenster"), |ui| {
+                    menu_item(ui, acts, tr("Select Previous Tab   Ctrl+Shift+Tab", "Vorheriger Tab   Strg+Umschalt+Tab"), Act::TabStep(-1));
+                    menu_item(ui, acts, tr("Select Next Tab   Ctrl+Tab", "Nächster Tab   Strg+Tab"), Act::TabStep(1));
                     ui.separator();
-                    menu_item(ui, acts, tr("Activity", "Aktivität"), Act::ToggleActivity);
-                    menu_item(ui, acts, tr("Git Console (type commands)", "Git-Konsole (Befehle eintippen)"), Act::ToggleConsole);
-                    ui.separator();
-                    ui.menu_button(tr("Language", "Sprache"), |ui| {
-                        for (l, name) in [(Lang::En, "English"), (Lang::De, "Deutsch")] {
-                            if ui.selectable_label(self.lang == l, name).clicked() {
-                                acts.push(Act::Lang(l));
-                                ui.close();
-                            }
-                        }
-                    });
+                    menu_item(ui, acts, tr("Switch Theme", "Hell/Dunkel wechseln"), Act::Theme(!theme::is_light()));
+                    menu_item(ui, acts, tr("Zoom In   Ctrl++", "Vergrößern   Strg++"), Act::Zoom(0.1));
+                    menu_item(ui, acts, tr("Zoom Out   Ctrl+-", "Verkleinern   Strg+-"), Act::Zoom(-0.1));
+                    menu_item(ui, acts, tr("Actual Size   Ctrl+0", "Originalgröße   Strg+0"), Act::Zoom(0.0));
                 });
                 ui.menu_button(tr("Help", "Hilfe"), |ui| {
-                    ui.label(RichText::new(tr("Hover over any button to see what it does.", "Fahre über einen Knopf, um zu sehen, was er tut.")).color(theme::TEXT_DIM));
+                    menu_item(ui, acts, tr("Keyboard Shortcuts", "Tastenkürzel"), Act::Shortcuts);
                     ui.separator();
-                    menu_cmd(ui, &self.cmds, acts, "version", None, vec![]);
-                    menu_cmd(ui, &self.cmds, acts, "config_name", None, vec![]);
-                    menu_cmd(ui, &self.cmds, acts, "config_email", None, vec![]);
+                    for (label, url) in [
+                        (tr("Git Documentation", "Git-Dokumentation"), "https://git-scm.com/docs"),
+                        (tr("Pro Git Book (free)", "Pro-Git-Buch (kostenlos)"), "https://git-scm.com/book/de/v2"),
+                        (tr("Git Cheat Sheet", "Git-Spickzettel"), "https://education.github.com/git-cheat-sheet-education.pdf"),
+                    ] {
+                        if ui.button(label).clicked() {
+                            super::auth::open_url(url);
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    menu_cmd(ui, &self.cmds, acts, "version", Some(tr("Git Version…", "Git-Version…")), vec![]);
+                    menu_item(ui, acts, tr("About YAGUI", "Über YAGUI"), Act::About);
                 });
             });
         });
@@ -410,9 +487,20 @@ impl App {
         let has = !self.tabs.is_empty();
         let (rname, head) = self.tabs.get(self.active).map(|r| (r.name.clone(), r.head.clone())).unwrap_or_default();
         let locals: Vec<String> = self.tabs.get(self.active).map(|r| r.local.iter().map(|b| b.name.clone()).collect()).unwrap_or_default();
-        egui::Panel::top("toolbar").exact_size(52.0).frame(egui::Frame::new().fill(theme::TOOLBAR).inner_margin(egui::Margin::symmetric(8, 3))).show(ui, |ui| {
+        egui::Panel::top("toolbar").exact_size(52.0).frame(egui::Frame::new().fill(theme::TOOLBAR()).inner_margin(egui::Margin::symmetric(8, 3))).show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
+                {
+                    let (rect, resp) = ui.allocate_exact_size(Vec2::new(34.0, 40.0), Sense::click());
+                    let p = ui.painter_at(rect);
+                    if resp.hovered() || self.show_tablist {
+                        p.rect_filled(rect.shrink2(Vec2::new(2.0, 6.0)), 4, theme::ROW_HOVER());
+                    }
+                    icons::draw(&p, egui::Rect::from_center_size(rect.center(), Vec2::splat(17.0)), Icon::Sidebar, if self.show_tablist { theme::ACCENT() } else { theme::TEXT() });
+                    if resp.on_hover_text(tr("Show open repositories and workspaces; + opens the Repository Manager", "Offene Repositories und Workspaces zeigen; + öffnet den Repository Manager")).clicked() {
+                        acts.push(Act::ToggleTabList);
+                    }
+                }
                 if tool_button(ui, Icon::Search, tr("Quick Launch", "Schnellstart"), tr("Find any Git command (Ctrl+Shift+P)", "Jeden Git-Befehl finden (Strg+Umschalt+P)"), "", true).clicked() {
                     acts.push(Act::QuickLaunch);
                 }
@@ -430,33 +518,55 @@ impl App {
                 if tool_button(ui, Icon::Stash, "Stash", tr("Put local changes aside", "Lokale Änderungen zwischenlagern"), "git stash push", has).clicked() {
                     acts.push(Act::Open("stash_push", vec![]));
                 }
+                let stashes: Vec<(String, String)> = self.tabs.get(self.active).map(|r| r.stashes.clone()).unwrap_or_default();
+                let dd = dropdown_arrow(ui, has, tr("More stash actions", "Weitere Stash-Aktionen"));
+                egui::Popup::menu(&dd).show(|ui| {
+                    ui.set_min_width(260.0);
+                    ui.label(RichText::new(tr("Recent Stashes", "Letzte Stashes")).size(11.5).color(theme::TEXT_FAINT()));
+                    if stashes.is_empty() {
+                        ui.label(RichText::new(tr("none", "keine")).color(theme::TEXT_DIM()));
+                    }
+                    for (name, msg) in stashes.iter().take(8) {
+                        ui.menu_button(format!("{name}  {}", msg.chars().take(40).collect::<String>()), |ui| {
+                            menu_cmd(ui, &self.cmds, acts, "stash_apply", Some(tr("Apply…", "Anwenden…")), vec![("stash", name.clone())]);
+                            menu_cmd(ui, &self.cmds, acts, "stash_pop", Some(tr("Pop (apply and delete)…", "Zurückholen (anwenden und löschen)…")), vec![("stash", name.clone())]);
+                            menu_cmd(ui, &self.cmds, acts, "stash_drop", Some(tr("Delete…", "Löschen…")), vec![("stash", name.clone())]);
+                        });
+                    }
+                    ui.separator();
+                    let b = ui.button(tr("Save Snapshot…", "Schnappschuss speichern…"));
+                    if tip_with_cmd(b, tr("Store the current changes as a stash and keep working on them", "Speichert die Änderungen als Stash und lässt sie im Arbeitsordner"), "git stash store $(git stash create)").clicked() {
+                        acts.push(Act::Snapshot);
+                        ui.close();
+                    }
+                });
                 if tool_button(ui, Icon::Pop, "Pop", tr("Bring back the latest stash", "Letzten Stash zurückholen"), "git stash pop", has).clicked() {
                     acts.push(Act::Open("stash_pop", vec![]));
                 }
 
                 // Centre: repository and current branch – click to switch branch.
-                let right_w = 4.0 * 62.0;
+                let right_w = 7.0 * 62.0;
                 let centre_w = 250.0;
                 let pad = ((ui.available_width() - right_w - centre_w - 120.0) / 2.0).max(8.0);
                 ui.add_space(pad);
                 let (rect, resp) = ui.allocate_exact_size(Vec2::new(centre_w, 38.0), if has { Sense::click() } else { Sense::hover() });
                 let p = ui.painter_at(rect);
-                p.rect_filled(rect, 5, if resp.hovered() && has { Color32::from_rgb(0x33, 0x33, 0x36) } else { Color32::from_rgb(0x2a, 0x2a, 0x2c) });
+                p.rect_filled(rect, 5, if resp.hovered() && has { theme::dk(0x33, 0x33, 0x36) } else { theme::dk(0x2a, 0x2a, 0x2c) });
                 if has {
-                    p.text(rect.center_top() + Vec2::new(0.0, 11.0), Align2::CENTER_CENTER, &rname, FontId::new(13.0, theme::semibold()), theme::TEXT_STRONG);
-                    let g = p.layout_no_wrap(head.clone(), FontId::proportional(11.5), theme::TEXT_DIM);
+                    p.text(rect.center_top() + Vec2::new(0.0, 11.0), Align2::CENTER_CENTER, &rname, FontId::new(13.0, theme::semibold()), theme::TEXT_STRONG());
+                    let g = p.layout_no_wrap(head.clone(), FontId::proportional(11.5), theme::TEXT_DIM());
                     let bx = rect.center().x - g.size().x / 2.0 + 7.0;
-                    icons::draw(&p, egui::Rect::from_center_size(egui::pos2(bx - 10.0, rect.bottom() - 11.0), Vec2::splat(11.0)), Icon::Branch, theme::TEXT_DIM);
-                    p.galley(egui::pos2(bx, rect.bottom() - 11.0 - g.size().y / 2.0), g, theme::TEXT_DIM);
-                    icons::draw(&p, egui::Rect::from_center_size(egui::pos2(rect.right() - 14.0, rect.center().y), Vec2::splat(10.0)), Icon::ChevronDown, theme::TEXT_DIM);
+                    icons::draw(&p, egui::Rect::from_center_size(egui::pos2(bx - 10.0, rect.bottom() - 11.0), Vec2::splat(11.0)), Icon::Branch, theme::TEXT_DIM());
+                    p.galley(egui::pos2(bx, rect.bottom() - 11.0 - g.size().y / 2.0), g, theme::TEXT_DIM());
+                    icons::draw(&p, egui::Rect::from_center_size(egui::pos2(rect.right() - 14.0, rect.center().y), Vec2::splat(10.0)), Icon::ChevronDown, theme::TEXT_DIM());
                 } else {
-                    p.text(rect.center(), Align2::CENTER_CENTER, tr("No repository", "Kein Repository"), FontId::proportional(12.5), theme::TEXT_DIM);
+                    p.text(rect.center(), Align2::CENTER_CENTER, tr("No repository", "Kein Repository"), FontId::proportional(12.5), theme::TEXT_DIM());
                 }
                 let resp = resp.on_hover_text(tr("Current branch – click to switch", "Aktueller Branch – klicken zum Wechseln"));
                 if has {
                     egui::Popup::menu(&resp).show(|ui| {
                         ui.set_min_width(220.0);
-                        ui.label(RichText::new(tr("Switch to", "Wechseln zu")).size(11.5).color(theme::TEXT_DIM));
+                        ui.label(RichText::new(tr("Switch to", "Wechseln zu")).size(11.5).color(theme::TEXT_DIM()));
                         for b in &locals {
                             let resp = ui.selectable_label(*b == head, b);
                             if resp.clicked() && *b != head {
@@ -468,20 +578,54 @@ impl App {
                 }
                 ui.add_space(6.0);
                 if tool_button(ui, Icon::Branch, "Branch", tr("Create a branch and switch to it", "Branch anlegen und wechseln"), "git switch -c", has).clicked() {
-                    acts.push(Act::Open("switch_create", vec![]));
+                    acts.push(Act::NewBranch(None));
                 }
+                let dd = dropdown_arrow(ui, has, tr("More branch actions", "Weitere Branch-Aktionen"));
+                egui::Popup::menu(&dd).show(|ui| {
+                    menu_item(ui, acts, tr("New Branch…", "Neuer Branch…"), Act::NewBranch(None));
+                    menu_cmd(ui, &self.cmds, acts, "worktree_add", Some(tr("New Worktree…", "Neuer Worktree…")), vec![]);
+                    menu_item(ui, acts, tr("New Tag…", "Neuer Tag…"), Act::NewTag(None));
+                });
                 if tool_button(ui, Icon::Merge, "Merge", tr("Merge another branch into this one", "Anderen Branch zusammenführen"), "git merge", has).clicked() {
                     acts.push(Act::Open("merge", vec![]));
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Workspaces
+                    let ws_name = self.workspaces.get(self.ws).map(|w| w.name.clone()).unwrap_or_default();
+                    let b = tool_button(ui, Icon::Cube, &short_label(&ws_name), tr("Workspace: each one keeps its own open repositories", "Workspace: jeder hat seine eigenen offenen Repositories"), "", true);
+                    egui::Popup::menu(&b).show(|ui| self.workspace_menu(ui, acts));
+                    // Appearance
+                    let b = tool_button(ui, Icon::Theme, tr("Appearance", "Darstellung"), tr("Theme and commit list layout", "Farbschema und Anordnung der Commit-Liste"), "", true);
+                    egui::Popup::menu(&b).show(|ui| {
+                        ui.label(RichText::new(tr("Theme", "Farbschema")).size(11.5).color(theme::TEXT_FAINT()));
+                        if ui.radio(theme::is_light(), tr("Light", "Hell")).clicked() {
+                            acts.push(Act::Theme(true));
+                            ui.close();
+                        }
+                        if ui.radio(!theme::is_light(), tr("Dark", "Dunkel")).clicked() {
+                            acts.push(Act::Theme(false));
+                            ui.close();
+                        }
+                        ui.separator();
+                        ui.label(RichText::new(tr("Commit List Layout", "Anordnung der Commit-Liste")).size(11.5).color(theme::TEXT_FAINT()));
+                        if ui.radio(!self.layout_vertical, tr("Horizontal (details below)", "Horizontal (Details unten)")).clicked() {
+                            acts.push(Act::Layout(false));
+                            ui.close();
+                        }
+                        if ui.radio(self.layout_vertical, tr("Vertical (details on the right)", "Vertikal (Details rechts)")).clicked() {
+                            acts.push(Act::Layout(true));
+                            ui.close();
+                        }
+                    });
+                    separator_v(ui);
                     if tool_button(ui, Icon::Activity, tr("Activity", "Aktivität"), tr("Commands run so far and their output", "Ausgeführte Befehle und ihre Ausgabe"), "", true).clicked() {
                         acts.push(Act::ToggleActivity);
                     }
                     let cmds_on = self.commands_view;
                     let b = tool_button(ui, Icon::Cube, tr("Commands", "Befehle"), tr("All Git commands, explained and runnable", "Alle Git-Befehle, erklärt und ausführbar"), "", true);
                     if cmds_on {
-                        ui.painter().line_segment([b.rect.left_bottom() + Vec2::new(14.0, -2.0), b.rect.right_bottom() + Vec2::new(-14.0, -2.0)], egui::Stroke::new(2.0, theme::ACCENT));
+                        ui.painter().line_segment([b.rect.left_bottom() + Vec2::new(14.0, -2.0), b.rect.right_bottom() + Vec2::new(-14.0, -2.0)], egui::Stroke::new(2.0, theme::ACCENT()));
                     }
                     if b.clicked() {
                         acts.push(Act::Commands(!cmds_on));
@@ -500,35 +644,62 @@ impl App {
     }
 
     pub(super) fn tab_bar(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
-        egui::Panel::top("tabs").exact_size(26.0).frame(egui::Frame::new().fill(theme::TABS)).show(ui, |ui| {
+        egui::Panel::top("tabs").exact_size(26.0).frame(egui::Frame::new().fill(theme::TABS())).show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let n = self.tabs.len().max(1);
                 let w = ((ui.available_width() - 28.0) / n as f32).clamp(110.0, 320.0);
+                let mut menus: Vec<(egui::Response, usize)> = Vec::new();
                 for (i, t) in self.tabs.iter().enumerate() {
                     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 26.0), Sense::click());
-                    let active = i == self.active;
+                    let active = i == self.active && !self.manager_active;
                     let p = ui.painter_at(rect);
-                    let bg = if active { theme::PANEL } else if resp.hovered() { Color32::from_rgb(0x22, 0x22, 0x22) } else { theme::TABS };
+                    let bg = if active { theme::PANEL() } else if resp.hovered() { theme::dk(0x22, 0x22, 0x22) } else { theme::TABS() };
                     p.rect_filled(rect, 0, bg);
-                    p.line_segment([rect.right_top(), rect.right_bottom()], Stroke::new(1.0, Color32::from_rgb(0x2c, 0x2c, 0x2c)));
-                    p.text(rect.center(), Align2::CENTER_CENTER, &t.name, FontId::proportional(12.5), if active { theme::TEXT_STRONG } else { theme::TEXT_DIM });
+                    p.line_segment([rect.right_top(), rect.right_bottom()], Stroke::new(1.0, theme::dk(0x2c, 0x2c, 0x2c)));
+                    p.text(rect.center(), Align2::CENTER_CENTER, &t.name, FontId::proportional(12.5), if active { theme::TEXT_STRONG() } else { theme::TEXT_DIM() });
                     let close = egui::Rect::from_center_size(rect.right_center() - Vec2::new(14.0, 0.0), Vec2::splat(14.0));
                     let hover_close = resp.hover_pos().map(|p| close.contains(p)).unwrap_or(false);
                     if resp.hovered() {
                         if hover_close {
-                            p.rect_filled(close.expand(2.0), 3, Color32::from_rgb(0x44, 0x44, 0x48));
+                            p.rect_filled(close.expand(2.0), 3, theme::dk(0x44, 0x44, 0x48));
                         }
-                        icons::draw(&p, close.shrink(2.0), Icon::Close, theme::TEXT_DIM);
+                        icons::draw(&p, close.shrink(2.0), Icon::Close, theme::TEXT_DIM());
                     }
                     if resp.clicked() {
                         acts.push(if hover_close { Act::CloseTab(i) } else { Act::SwitchTab(i) });
                     }
-                    resp.on_hover_text(t.path.display().to_string());
+                    if resp.middle_clicked() {
+                        acts.push(Act::CloseTab(i));
+                    }
+                    let resp = resp.on_hover_text(t.path.display().to_string());
+                    menus.push((resp, i));
+                }
+                if self.manager_tab {
+                    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w.min(220.0), 26.0), Sense::click());
+                    let p = ui.painter_at(rect);
+                    let active = self.manager_active;
+                    p.rect_filled(rect, 0, if active { theme::PANEL() } else if resp.hovered() { theme::ROW_HOVER() } else { theme::TABS() });
+                    p.text(rect.center(), Align2::CENTER_CENTER, tr("Repository Manager", "Repository Manager"), FontId::proportional(12.5), if active { theme::TEXT_STRONG() } else { theme::TEXT_DIM() });
+                    let close = egui::Rect::from_center_size(rect.right_center() - Vec2::new(14.0, 0.0), Vec2::splat(14.0));
+                    let hover_close = resp.hover_pos().map(|p| close.contains(p)).unwrap_or(false);
+                    if resp.hovered() {
+                        icons::draw(&p, close.shrink(2.0), Icon::Close, theme::TEXT_DIM());
+                    }
+                    if resp.clicked() {
+                        if hover_close {
+                            acts.push(Act::CloseManager);
+                        } else {
+                            acts.push(Act::Manager);
+                        }
+                    }
                 }
                 ui.add_space(4.0);
-                if icon_button(ui, Icon::Plus, tr("Open another repository", "Weiteres Repository öffnen")).clicked() {
-                    acts.push(Act::OpenRepoDialog);
+                if icon_button(ui, Icon::Plus, tr("New tab: Repository Manager (Ctrl+T)", "Neuer Tab: Repository Manager (Strg+T)")).clicked() {
+                    acts.push(Act::Manager);
+                }
+                for (resp, i) in menus {
+                    resp.context_menu(|ui| self.tab_menu(ui, acts, i));
                 }
             });
         });
@@ -536,35 +707,35 @@ impl App {
 
     pub(super) fn status_bar(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         let now = ui.ctx().input(|i| i.time);
-        egui::Panel::bottom("statusbar").exact_size(24.0).frame(egui::Frame::new().fill(theme::TOOLBAR).inner_margin(egui::Margin::symmetric(10, 0))).show(ui, |ui| {
+        egui::Panel::bottom("statusbar").exact_size(24.0).frame(egui::Frame::new().fill(theme::TOOLBAR()).inner_margin(egui::Margin::symmetric(10, 0))).show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 let running: Vec<&git::Job> = self.jobs.iter().filter(|j| j.state() == JobState::Running).collect();
                 if let Some(j) = running.last() {
                     ui.spinner();
                     ui.label(RichText::new(&j.title).size(12.0));
-                    ui.label(RichText::new(j.display.lines().next().unwrap_or("")).monospace().size(11.0).color(theme::TEXT_FAINT));
+                    ui.label(RichText::new(j.display.lines().next().unwrap_or("")).monospace().size(11.0).color(theme::TEXT_FAINT()));
                 } else if let Some(j) = self.jobs.iter().rev().find(|j| !j.automatic) {
                     let ok = matches!(j.state(), JobState::Done(0) | JobState::Started);
-                    icon(ui, if ok { Icon::Check } else { Icon::Warning }, 13.0, if ok { theme::GREEN } else { theme::RED });
-                    ui.label(RichText::new(&j.title).size(12.0).color(theme::TEXT_DIM));
-                    ui.label(RichText::new(j.display.lines().next().unwrap_or("")).monospace().size(11.0).color(theme::TEXT_FAINT));
+                    icon(ui, if ok { Icon::Check } else { Icon::Warning }, 13.0, if ok { theme::GREEN() } else { theme::RED() });
+                    ui.label(RichText::new(&j.title).size(12.0).color(theme::TEXT_DIM()));
+                    ui.label(RichText::new(j.display.lines().next().unwrap_or("")).monospace().size(11.0).color(theme::TEXT_FAINT()));
                 }
                 if let Some((msg, t)) = &self.toast {
                     if now - t < 6.0 {
-                        ui.label(RichText::new(msg).size(12.0).color(theme::YELLOW));
+                        ui.label(RichText::new(msg).size(12.0).color(theme::YELLOW()));
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     for (l, name) in [(Lang::De, "DE"), (Lang::En, "EN")] {
                         let sel = self.lang == l;
-                        let r = ui.add(egui::Button::new(RichText::new(name).size(11.0).color(if sel { theme::TEXT_STRONG } else { theme::TEXT_FAINT })).frame(false));
+                        let r = ui.add(egui::Button::new(RichText::new(name).size(11.0).color(if sel { theme::TEXT_STRONG() } else { theme::TEXT_FAINT() })).frame(false));
                         if r.on_hover_text(tr("Interface language", "Sprache der Oberfläche")).clicked() && !sel {
                             acts.push(Act::Lang(l));
                         }
                     }
                     ui.add_space(8.0);
                     let label = format!("{} ({})", tr("Activity", "Aktivität"), self.jobs.iter().filter(|j| !j.automatic).count());
-                    if ui.add(egui::Button::new(RichText::new(label).size(11.5).color(theme::TEXT_DIM)).frame(false)).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(label).size(11.5).color(theme::TEXT_DIM())).frame(false)).clicked() {
                         acts.push(Act::ToggleActivity);
                     }
                 });
@@ -583,11 +754,11 @@ impl App {
         let first = out.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string();
         let title = j.title.clone();
         let mut close = false;
-        egui::Frame::new().fill(Color32::from_rgb(0x4a, 0x25, 0x27)).inner_margin(egui::Margin::symmetric(12, 7)).show(ui, |ui| {
+        egui::Frame::new().fill(theme::dk(0x4a, 0x25, 0x27)).inner_margin(egui::Margin::symmetric(12, 7)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 icon(ui, Icon::Warning, 15.0, Color32::from_rgb(0xf2, 0x9a, 0x9a));
-                ui.label(RichText::new(trs(format!("{title} failed"), format!("{title} fehlgeschlagen"))).color(theme::TEXT_STRONG));
+                ui.label(RichText::new(trs(format!("{title} failed"), format!("{title} fehlgeschlagen"))).color(theme::TEXT_STRONG()));
                 ui.label(RichText::new(&first).color(Color32::from_rgb(0xe8, 0xb8, 0xb8)));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if icon_button(ui, Icon::Close, tr("Dismiss", "Ausblenden")).clicked() {
@@ -615,13 +786,13 @@ impl App {
         };
         if let Some(e) = &r.error {
             let e = e.clone();
-            bar(ui, Color32::from_rgb(0x4a, 0x25, 0x27), &mut |ui| {
-                ui.label(RichText::new(&e).color(theme::TEXT_STRONG));
+            bar(ui, theme::dk(0x4a, 0x25, 0x27), &mut |ui| {
+                ui.label(RichText::new(&e).color(theme::TEXT_STRONG()));
             });
         }
         if let Some(lock) = r.locked {
-            bar(ui, Color32::from_rgb(0x3a, 0x30, 0x22), &mut |ui| {
-                icon(ui, Icon::Lock, 14.0, theme::YELLOW);
+            bar(ui, theme::dk(0x3a, 0x30, 0x22), &mut |ui| {
+                icon(ui, Icon::Lock, 14.0, theme::YELLOW());
                 ui.label(trs(
                     format!("Another Git process is working on this repository (.git/{lock}). The view updates by itself when it is done."),
                     format!("Ein anderer Git-Prozess arbeitet gerade am Repository (.git/{lock}). Die Anzeige aktualisiert sich danach von selbst."),
@@ -641,9 +812,9 @@ impl App {
         };
         let cmds = &self.cmds;
         let squash = st == "squash";
-        bar(ui, Color32::from_rgb(0x3d, 0x33, 0x1c), &mut |ui| {
-            icon(ui, Icon::Warning, 14.0, theme::YELLOW);
-            ui.label(RichText::new(text).color(theme::TEXT_STRONG));
+        bar(ui, theme::dk(0x3d, 0x33, 0x1c), &mut |ui| {
+            icon(ui, Icon::Warning, 14.0, theme::YELLOW());
+            ui.label(RichText::new(text).color(theme::TEXT_STRONG()));
             ui.add_space(8.0);
             for id in &ids {
                 let cmd = &cmds[catalog::find(cmds, id)];
@@ -663,12 +834,36 @@ impl App {
 
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         let cmds_on = self.commands_view;
+        let pinned: Vec<String> = {
+            let key = format!("{}|", self.tabs[self.active].path.display());
+            self.pinned.iter().filter_map(|p| p.strip_prefix(&key).map(String::from)).collect()
+        };
+        let sort = self.branch_sort;
+        let branch_customs = self.customs_for(2);
+        let mut new_sort: Option<u8> = None;
         let r = &mut self.tabs[self.active];
-        egui::Panel::left("sidebar").resizable(true).default_size(260.0).min_size(200.0).frame(egui::Frame::new().fill(theme::SIDEBAR).inner_margin(egui::Margin { left: 6, right: 6, top: 8, bottom: 6 })).show(ui, |ui| {
+        egui::Panel::left("sidebar").resizable(true).default_size(260.0).min_size(200.0).frame(egui::Frame::new().fill(theme::SIDEBAR()).inner_margin(egui::Margin { left: 6, right: 6, top: 8, bottom: 6 })).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(6.0);
-                ui.label(RichText::new(&r.name).font(FontId::new(14.0, theme::semibold())).color(theme::TEXT_STRONG));
+                ui.label(RichText::new(&r.name).font(FontId::new(14.0, theme::semibold())).color(theme::TEXT_STRONG()));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let g = icon_button(ui, Icon::Settings, tr("Repository settings", "Repository-Einstellungen"));
+                    let path = r.path.clone();
+                    egui::Popup::menu(&g).show(|ui| {
+                        if ui.button(tr("Rename Repository…", "Repository umbenennen…")).clicked() {
+                            acts.push(Act::RenameRepo(path.clone()));
+                            ui.close();
+                        }
+                        if ui.button(tr("Copy Repository Path", "Repository-Pfad kopieren")).clicked() {
+                            acts.push(Act::Copy(super::auth::native(&path)));
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(tr("Settings for This Repository…", "Einstellungen für dieses Repository…")).clicked() {
+                            acts.push(Act::RepoSettings);
+                            ui.close();
+                        }
+                    });
                     if icon_button(ui, Icon::Refresh, tr("Refresh (F5)", "Neu laden (F5)")).clicked() {
                         acts.push(Act::Refresh);
                     }
@@ -697,9 +892,32 @@ impl App {
             let head = r.head.clone();
 
             egui::ScrollArea::vertical().id_salt("side_scroll").auto_shrink([false; 2]).show(ui, |ui| {
-                // Branches
-                if section(ui, "branches", tr("Branches", "Branches"), r.local.len(), true) {
-                    for b in r.local.iter().filter(|b| matches(&b.name)) {
+                // Branches: pinned first, then a folder tree ("feature/x" lives in "feature").
+                let (open_b, hdr) = section_r(ui, "branches", tr("Branches", "Branches"), r.local.len(), true);
+                hdr.context_menu(|ui| {
+                    menu_item(ui, acts, tr("New Branch…", "Neuer Branch…"), Act::NewBranch(None));
+                    menu_item(ui, acts, tr("Select Stale Local Branches…", "Veraltete lokale Branches auswählen…"), Act::StaleBranches);
+                    ui.separator();
+                    ui.label(RichText::new(tr("Sort Branches:", "Branches sortieren:")).size(11.5).color(theme::TEXT_FAINT()));
+                    for (i, l) in [tr("Alphabetically", "Alphabetisch"), tr("Alphabetically backward", "Alphabetisch rückwärts"), tr("Recently used", "Zuletzt verwendet")].iter().enumerate() {
+                        if ui.radio(sort == i as u8, *l).clicked() {
+                            new_sort = Some(i as u8);
+                            ui.close();
+                        }
+                    }
+                });
+                if open_b {
+                    let mut names: Vec<String> = r.local.iter().map(|b| b.name.clone()).filter(|n| matches(n)).collect();
+                    match sort {
+                        1 => names.sort_by(|a, b| b.to_lowercase().cmp(&a.to_lowercase())),
+                        2 => names.sort_by_key(|n| r.branch_recency.iter().position(|x| x == n).unwrap_or(usize::MAX)),
+                        _ => names.sort_by_key(|n| n.to_lowercase()),
+                    }
+                    let pins: Vec<String> = names.iter().filter(|n| pinned.contains(n)).cloned().collect();
+                    let rest: Vec<String> = names.iter().filter(|n| !pinned.contains(n)).cloned().collect();
+                    let ctx = ui.ctx().clone();
+                    let mut draw_branch = |ui: &mut egui::Ui, name: &str, label: &str, indent: f32, acts: &mut Vec<Act>| {
+                        let Some(b) = r.local.iter().find(|b| b.name == name) else { return };
                         let (a, be, gone) = Repo::ahead_behind(&b.track);
                         let mut right = String::new();
                         if a > 0 {
@@ -711,12 +929,39 @@ impl App {
                         if gone {
                             right = tr("gone", "entfernt").into();
                         }
-                        let resp = list_row(ui, Some(if b.is_head { Icon::Check } else { Icon::Branch }), &b.name, b.is_head, right.trim(), false, 8.0);
+                        let is_pinned = pinned.iter().any(|p| p == name);
+                        let filtered = r.log_opts.only.as_deref() == Some(name);
+                        let hidden = r.log_opts.hidden.iter().any(|h| h == name);
+                        let resp = list_row(ui, Some(if b.is_head { Icon::Check } else { Icon::Branch }), label, b.is_head, right.trim(), filtered, indent);
+                        // Hover buttons: pin, show only this branch, hide it.
+                        let mut hit_button = false;
+                        if resp.hovered() || is_pinned || filtered || hidden {
+                            let p = ui.painter_at(resp.rect);
+                            let rr = resp.rect;
+                            let right_x = rr.right() - 8.0 - if right.trim().is_empty() { 0.0 } else { 42.0 };
+                            for (k, (ic, on, act)) in [(Icon::Eye, hidden, Act::HideBranch(name.to_string())), (Icon::Filter, filtered, Act::FilterBranch(name.to_string())), (Icon::Pin, is_pinned, Act::PinBranch(name.to_string()))].into_iter().enumerate() {
+                                if !(resp.hovered() || on) {
+                                    continue;
+                                }
+                                let c = egui::pos2(right_x - 8.0 - k as f32 * 18.0, rr.center().y);
+                                let br = egui::Rect::from_center_size(c, Vec2::splat(16.0));
+                                let hov = resp.hover_pos().map(|hp| br.contains(hp)).unwrap_or(false);
+                                if hov {
+                                    p.rect_filled(br, 3, theme::ROW_SEL());
+                                }
+                                icons::draw(&p, br.shrink(2.0), ic, if on { theme::ACCENT() } else { theme::TEXT_DIM() });
+                                if hov && resp.clicked() {
+                                    acts.push(act);
+                                    hit_button = true;
+                                }
+                            }
+                        }
                         let resp = resp.on_hover_text(trs(
                             format!("{}{}\nDouble-click to switch · right-click for actions", b.name, if b.upstream.is_empty() { String::new() } else { format!(" → {}", b.upstream) }),
                             format!("{}{}\nDoppelklick zum Wechseln · Rechtsklick für Aktionen", b.name, if b.upstream.is_empty() { String::new() } else { format!(" → {}", b.upstream) }),
                         ));
-                        if resp.double_clicked() && !b.is_head {
+                        if hit_button {
+                        } else if resp.double_clicked() && !b.is_head {
                             acts.push(Act::Open("switch", vec![("branch", b.name.clone())]));
                         } else if resp.clicked() {
                             acts.push(Act::JumpToRef(b.name.clone()));
@@ -725,7 +970,37 @@ impl App {
                         let up = b.upstream.clone();
                         let head = head.clone();
                         let cmds = &self.cmds;
-                        resp.context_menu(|ui| branch_menu(ui, cmds, acts, &name, &up, &head, false));
+                        let extra = BranchExtra {
+                            pr: r.remotes.first().and_then(|(rn, url)| super::manager::web_url(url).map(|w| (rn.clone(), pr_url(&w, &name)))),
+                            remote_branches: r.remote_branches.iter().map(|b| b.name.clone()).collect(),
+                            customs: branch_customs.clone(),
+                            pinned: is_pinned,
+                            filtered,
+                            hidden,
+                        };
+                        resp.context_menu(|ui| branch_menu(ui, cmds, acts, &name, &up, &head, false, &extra));
+                    };
+                    for n in &pins {
+                        draw_branch(ui, n, n, 8.0, acts);
+                    }
+                    let refs: Vec<&str> = rest.iter().map(|s| s.as_str()).collect();
+                    if sort == 0 || sort == 1 {
+                        for row in super::tree::rows(&ctx, "side-branches", &refs, true) {
+                            match row {
+                                super::tree::Row::Dir { path, label, depth, count, open } => {
+                                    if super::tree::dir_row(ui, &label, depth, count, open, None).0.clicked() {
+                                        super::tree::toggle(&ctx, "side-branches", &path, true);
+                                    }
+                                }
+                                super::tree::Row::File { idx, name, depth } => {
+                                    draw_branch(ui, refs[idx], &name, 8.0 + depth as f32 * super::tree::INDENT, acts);
+                                }
+                            }
+                        }
+                    } else {
+                        for n in &rest {
+                            draw_branch(ui, n, n, 8.0, acts);
+                        }
                     }
                 }
                 ui.add_space(2.0);
@@ -749,6 +1024,15 @@ impl App {
                             }
                             menu_cmd(ui, cmds, acts, "remote_rename", None, vec![("remote", rn2.clone())]);
                             menu_cmd(ui, cmds, acts, "remote_prune", None, vec![("remote", rn2.clone())]);
+                            if let Some(w) = super::manager::web_url(&url2) {
+                                let host = if w.contains("github") { "GitHub" } else if w.contains("gitlab") { "GitLab" } else if w.contains("bitbucket") { "Bitbucket" } else { tr("the web", "im Web") };
+                                if ui.button(trs(format!("View on {host}"), format!("Auf {host} ansehen"))).clicked() {
+                                    super::auth::open_url(&w);
+                                    ui.close();
+                                }
+                            }
+                            menu_cmd(ui, cmds, acts, "remote_add", Some(tr("Add New Remote…", "Neues Remote hinzufügen…")), vec![]);
+                            menu_item(ui, acts, tr("Copy Remote Address", "Remote-Adresse kopieren"), Act::Copy(url2.clone()));
                             ui.separator();
                             menu_cmd(ui, cmds, acts, "remote_remove", None, vec![("remote", rn2.clone())]);
                         });
@@ -764,13 +1048,26 @@ impl App {
                                 let name = b.name.clone();
                                 let head = head.clone();
                                 let cmds = &self.cmds;
-                                resp.context_menu(|ui| branch_menu(ui, cmds, acts, &name, "", &head, true));
+                                let extra = BranchExtra {
+                                    pr: r.remotes.iter().find(|(rn, _)| name.starts_with(&format!("{rn}/"))).and_then(|(rn, url)| super::manager::web_url(url).map(|w| (rn.clone(), pr_url(&w, name.split_once('/').map(|x| x.1).unwrap_or(&name))))),
+                                    remote_branches: vec![],
+                                    customs: branch_customs.clone(),
+                                    pinned: false,
+                                    filtered: r.log_opts.only.as_deref() == Some(name.as_str()),
+                                    hidden: false,
+                                };
+                                resp.context_menu(|ui| branch_menu(ui, cmds, acts, &name, "", &head, true, &extra));
                             }
                         }
                     }
                 }
                 ui.add_space(2.0);
-                if section(ui, "tags", tr("Tags", "Tags"), r.tags.len(), false) {
+                let (open_t, hdr) = section_r(ui, "tags", tr("Tags", "Tags"), r.tags.len(), false);
+                hdr.context_menu(|ui| {
+                    menu_item(ui, acts, tr("New Tag…", "Neuer Tag…"), Act::NewTag(None));
+                    menu_cmd(ui, &self.cmds, acts, "push_tags", Some(tr("Push All Tags…", "Alle Tags pushen…")), vec![]);
+                });
+                if open_t {
                     for t in r.tags.iter().rev().filter(|t| matches(&t.name)) {
                         let resp = list_row(ui, Some(Icon::Tag), &t.name, false, "", false, 8.0);
                         if resp.clicked() {
@@ -802,13 +1099,20 @@ impl App {
                             menu_cmd(ui, cmds, acts, "stash_apply", None, vec![("stash", name.clone())]);
                             menu_cmd(ui, cmds, acts, "stash_pop", None, vec![("stash", name.clone())]);
                             menu_cmd(ui, cmds, acts, "stash_branch", None, vec![("stash", name.clone())]);
+                            menu_item(ui, acts, tr("Rename…", "Umbenennen…"), Act::RenameStash(name.clone()));
+                            menu_item(ui, acts, tr("Save as Patch…", "Als Patch speichern…"), Act::StashPatch(name.clone()));
                             ui.separator();
                             menu_cmd(ui, cmds, acts, "stash_drop", None, vec![("stash", name.clone())]);
                         });
                     }
                 }
                 ui.add_space(2.0);
-                if section(ui, "submodules", tr("Submodules", "Submodule"), r.submodules.len(), false) {
+                let (open_s, hdr) = section_r(ui, "submodules", tr("Submodules", "Submodule"), r.submodules.len(), false);
+                hdr.context_menu(|ui| {
+                    menu_cmd(ui, &self.cmds, acts, "submodule_add", Some(tr("Add New Submodule…", "Neues Submodul hinzufügen…")), vec![]);
+                    menu_cmd(ui, &self.cmds, acts, "submodule_update", Some(tr("Update Submodules…", "Submodule aktualisieren…")), vec![]);
+                });
+                if open_s {
                     for s in &r.submodules {
                         let full = r.path.join(s);
                         let resp = list_row(ui, Some(Icon::Cube), s, false, "", false, 8.0);
@@ -844,43 +1148,127 @@ impl App {
                 }
             });
         });
+        if let Some(s) = new_sort {
+            self.branch_sort = s;
+            self.save();
+        }
     }
 
     // -----------------------------------------------------------------------------------------
     // History
 
     pub(super) fn commits_view(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
+        let (hide_details, vertical) = (self.hide_details, self.layout_vertical);
+        let commit_customs = self.customs_for(1);
+        let compact_labels = self.p.compact_labels;
+        let rules = if self.p.issue_links { self.repo_settings().issue_rules } else { vec![] };
         let cmds = &self.cmds;
         let r = &mut self.tabs[self.active];
-        egui::Panel::bottom("detail").resizable(true).default_size(340.0).min_size(140.0).frame(egui::Frame::new().fill(theme::PANEL).inner_margin(0)).show(ui, |ui| {
-            detail_pane(ui, r, acts);
-        });
+        if !hide_details {
+            let frame = egui::Frame::new().fill(theme::PANEL()).inner_margin(0);
+            if vertical {
+                egui::Panel::right("detail_v").resizable(true).default_size(560.0).min_size(260.0).frame(frame).show(ui, |ui| {
+                    detail_pane(ui, r, acts, &rules);
+                });
+            } else {
+                egui::Panel::bottom("detail").resizable(true).default_size(340.0).min_size(140.0).frame(frame).show(ui, |ui| {
+                    detail_pane(ui, r, acts, &rules);
+                });
+            }
+        }
+        // "Filtered by" bar above the list.
+        if r.log_opts.only.is_some() || !r.log_opts.hidden.is_empty() || r.log_opts.first_parent {
+            egui::Frame::new().fill(theme::PANEL_DARK()).inner_margin(egui::Margin::symmetric(12, 4)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    icon(ui, Icon::Filter, 13.0, theme::ACCENT());
+                    let mut parts = Vec::new();
+                    if let Some(o) = &r.log_opts.only {
+                        parts.push(trs(format!("only '{o}'"), format!("nur '{o}'")));
+                    }
+                    if !r.log_opts.hidden.is_empty() {
+                        parts.push(trs(format!("hidden: {}", r.log_opts.hidden.join(", ")), format!("ausgeblendet: {}", r.log_opts.hidden.join(", "))));
+                    }
+                    if r.log_opts.first_parent {
+                        parts.push(tr("first parent only", "nur erster Elternteil").to_string());
+                    }
+                    ui.label(RichText::new(trs(format!("Filtered by: {}", parts.join(" · ")), format!("Gefiltert: {}", parts.join(" · ")))).size(12.0));
+                    if ui.small_button(tr("Clear filter", "Filter aufheben")).clicked() {
+                        r.log_opts.only = None;
+                        r.log_opts.hidden.clear();
+                        r.log_opts.first_parent = false;
+                        r.reload(git::RELOAD_REFS);
+                    }
+                });
+            });
+        }
 
         egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 10, top: 6, bottom: 4 }).show(ui, |ui| {
             ui.horizontal(|ui| {
-                icon(ui, Icon::Search, 14.0, theme::TEXT_DIM);
-                ui.add(egui::TextEdit::singleline(&mut r.commit_search).hint_text(tr("Search message, author or SHA", "Beschreibung, Autor oder SHA suchen")).desired_width(300.0).frame(egui::Frame::NONE));
+                icon(ui, Icon::Search, 14.0, theme::TEXT_DIM());
+                let modes = [tr("Message, author, SHA", "Beschreibung, Autor, SHA"), tr("Path", "Pfad"), tr("Diff content", "Inhalt der Änderungen")];
+                let mode_before = r.search_mode;
+                egui::ComboBox::from_id_salt("search_mode").width(150.0).selected_text(modes[r.search_mode]).show_ui(ui, |ui| {
+                    for (i, m) in modes.iter().enumerate() {
+                        ui.selectable_value(&mut r.search_mode, i, *m);
+                    }
+                });
+                let hint = match r.search_mode {
+                    1 => tr("File or folder, e.g. src/app", "Datei oder Ordner, z. B. src/app"),
+                    2 => tr("Text added or removed, then Enter", "Hinzugefügter oder entfernter Text, dann Enter"),
+                    _ => tr("Search message, author or SHA", "Beschreibung, Autor oder SHA suchen"),
+                };
+                let te = ui.add(egui::TextEdit::singleline(&mut r.commit_search).hint_text(hint).desired_width(280.0).frame(egui::Frame::NONE));
+                // Path and diff-content searches ask git (git log -- <path> / git log -G <text>).
+                if r.search_mode > 0 && (mode_before != r.search_mode || (te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || (r.search_mode == 1 && te.changed())) {
+                    let q = r.commit_search.trim().to_string();
+                    if q.is_empty() {
+                        r.search_hits = None;
+                    } else {
+                        let mut args: Vec<String> = vec!["log".into(), "--format=%H".into(), "-n3000".into()];
+                        args.extend(git::log_tip_args(&r.log_opts));
+                        if r.search_mode == 1 {
+                            args.push("--".into());
+                            args.push(format!("*{q}*"));
+                        } else {
+                            args.insert(1, format!("-G{}", regex_escape(&q)));
+                        }
+                        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                        let out = git::run(&r.path, &refs).stdout;
+                        r.search_hits = Some(out.lines().map(|l| l.trim().to_string()).collect());
+                    }
+                } else if r.search_mode == 0 {
+                    r.search_hits = None;
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let before = (r.log_opts.hide_stashes, r.log_opts.reflog);
-                    ui.menu_button(RichText::new(tr("View options", "Anzeige")).size(12.0).color(theme::TEXT_DIM), |ui| {
+                    let before = (r.log_opts.hide_stashes, r.log_opts.reflog, r.log_opts.first_parent, r.log_opts.only.clone());
+                    ui.menu_button(RichText::new(tr("View options", "Anzeige")).size(12.0).color(theme::TEXT_DIM()), |ui| {
                         ui.checkbox(&mut r.log_opts.hide_stashes, tr("Hide stashes", "Stashes ausblenden"));
                         ui.checkbox(&mut r.log_opts.reflog, tr("Show reflog commits", "Reflog-Commits zeigen"));
+                        ui.checkbox(&mut r.log_opts.hide_tags, tr("Hide tags", "Tags ausblenden"));
+                        ui.checkbox(&mut r.log_opts.first_parent, tr("Collapse merges (first parent)", "Merges einklappen (erster Elternteil)"));
+                        let mut active_only = r.log_opts.only.as_deref() == Some("HEAD");
+                        if ui.checkbox(&mut active_only, tr("Only the active branch", "Nur aktiver Branch")).changed() {
+                            r.log_opts.only = if active_only { Some("HEAD".into()) } else { None };
+                        }
                         ui.separator();
-                        let tips = git::log_tip_args(r.log_opts).join(" ");
-                        ui.label(RichText::new(format!("git log --date-order {tips}")).monospace().size(10.5).color(theme::TEXT_FAINT));
+                        let tips = git::log_tip_args(&r.log_opts).join(" ");
+                        ui.label(RichText::new(format!("git log --date-order {tips}")).monospace().size(10.5).color(theme::TEXT_FAINT()));
                     });
-                    if before != (r.log_opts.hide_stashes, r.log_opts.reflog) {
+                    if before != (r.log_opts.hide_stashes, r.log_opts.reflog, r.log_opts.first_parent, r.log_opts.only.clone()) {
                         r.reload(git::RELOAD_REFS);
                     }
-                    ui.label(RichText::new(trs(format!("{} commits", r.commits.len()), format!("{} Commits", r.commits.len()))).size(12.0).color(theme::TEXT_FAINT));
+                    ui.label(RichText::new(trs(format!("{} commits", r.commits.len()), format!("{} Commits", r.commits.len()))).size(12.0).color(theme::TEXT_FAINT()));
                 });
             });
         });
         let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
-        ui.painter().rect_filled(rect, 0, theme::LINE);
+        ui.painter().rect_filled(rect, 0, theme::LINE());
 
         let q = r.commit_search.to_lowercase();
-        let visible: Vec<usize> = if q.is_empty() {
+        let visible: Vec<usize> = if let Some(hits) = &r.search_hits {
+            r.commits.iter().enumerate().filter(|(_, c)| hits.contains(&c.sha)).map(|(i, _)| i).collect()
+        } else if q.is_empty() || r.search_mode > 0 {
             (0..r.commits.len()).collect()
         } else {
             r.commits.iter().enumerate().filter(|(_, c)| c.subject.to_lowercase().contains(&q) || c.author.to_lowercase().contains(&q) || c.sha.starts_with(&q)).map(|(i, _)| i).collect()
@@ -892,7 +1280,9 @@ impl App {
                 scroll = scroll.vertical_scroll_offset((pos as f32 * row_h - 120.0).max(0.0));
             }
         }
-        let graph_on = q.is_empty();
+        let graph_on = q.is_empty() || (r.search_mode > 0 && r.search_hits.is_none());
+        let hide_tags = r.log_opts.hide_tags;
+        let compact = compact_labels;
         let lane_w = 14.0;
         let graph_w = if graph_on { r.lanes as f32 * lane_w + 14.0 } else { 8.0 };
         let head = r.head.clone();
@@ -905,9 +1295,9 @@ impl App {
                 let p = ui.painter_at(rect);
                 let sel = r.selected == Some(i);
                 if sel {
-                    p.rect_filled(rect, 0, theme::ROW_SEL);
+                    p.rect_filled(rect, 0, theme::ROW_SEL());
                 } else if resp.hovered() {
-                    p.rect_filled(rect, 0, theme::ROW_HOVER);
+                    p.rect_filled(rect, 0, theme::ROW_HOVER());
                 }
                 if graph_on {
                     if let Some(row) = r.rows.get(i) {
@@ -925,7 +1315,7 @@ impl App {
                         let col = theme::lane_color(row.lane);
                         p.circle_filled(egui::pos2(x(row.lane), mid), 4.5, col);
                         if c.parents.len() <= 1 {
-                            p.circle_filled(egui::pos2(x(row.lane), mid), 2.0, if sel { theme::ROW_SEL } else { theme::PANEL });
+                            p.circle_filled(egui::pos2(x(row.lane), mid), 2.0, if sel { theme::ROW_SEL() } else { theme::PANEL() });
                         }
                     }
                 }
@@ -936,16 +1326,28 @@ impl App {
                 let subj_right = right - date_w - sha_w - author_w - 14.0;
                 let mut x = rect.left() + graph_w + 4.0;
                 for rf in &c.refs {
+                    if hide_tags && rf.starts_with("tag: ") {
+                        continue;
+                    }
+                    // Compact labels: a server branch on the same commit as its local branch
+                    // is not shown separately.
+                    if compact && !rf.starts_with("tag: ") && !rf.starts_with("HEAD") && !r.local.iter().any(|b| &b.name == rf) {
+                        if let Some((_, short)) = rf.split_once('/') {
+                            if c.refs.iter().any(|x| x == short || x.strip_prefix("HEAD -> ") == Some(short)) {
+                                continue;
+                            }
+                        }
+                    }
                     let (label, ic, fill, stroke, fg) = if let Some(b) = rf.strip_prefix("HEAD -> ") {
-                        (b.to_string(), Some(Icon::Check), Color32::from_rgb(0x3a, 0x3a, 0x3d), theme::ORANGE, theme::TEXT_STRONG)
+                        (b.to_string(), Some(Icon::Check), theme::dk(0x3a, 0x3a, 0x3d), theme::ORANGE(), theme::TEXT_STRONG())
                     } else if let Some(t) = rf.strip_prefix("tag: ") {
-                        (t.to_string(), Some(Icon::Tag), Color32::from_rgb(0x3a, 0x34, 0x22), Color32::from_rgb(0x6a, 0x5a, 0x2a), theme::YELLOW)
+                        (t.to_string(), Some(Icon::Tag), theme::dk(0x3a, 0x34, 0x22), Color32::from_rgb(0x6a, 0x5a, 0x2a), theme::YELLOW())
                     } else if rf == "HEAD" {
-                        ("HEAD".to_string(), None, Color32::from_rgb(0x3a, 0x3a, 0x3d), theme::ORANGE, theme::TEXT_STRONG)
+                        ("HEAD".to_string(), None, theme::dk(0x3a, 0x3a, 0x3d), theme::ORANGE(), theme::TEXT_STRONG())
                     } else if r.local.iter().any(|b| &b.name == rf) {
-                        (rf.clone(), None, Color32::from_rgb(0x2b, 0x3d, 0x55), Color32::from_rgb(0x3e, 0x5a, 0x80), theme::TEXT_STRONG)
+                        (rf.clone(), None, theme::dk(0x2b, 0x3d, 0x55), Color32::from_rgb(0x3e, 0x5a, 0x80), theme::TEXT_STRONG())
                     } else {
-                        (rf.clone(), Some(Icon::Cloud), Color32::from_rgb(0x33, 0x33, 0x35), Color32::from_rgb(0x48, 0x48, 0x4c), theme::TEXT_DIM)
+                        (rf.clone(), Some(Icon::Cloud), theme::dk(0x33, 0x33, 0x35), theme::dk(0x48, 0x48, 0x4c), theme::TEXT_DIM())
                     };
                     let galley = p.layout_no_wrap(label, FontId::proportional(11.5), fg);
                     let iw = if ic.is_some() { 14.0 } else { 0.0 };
@@ -963,15 +1365,15 @@ impl App {
                     x += bw + 5.0;
                 }
                 let subj_rect = egui::Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(subj_right, rect.bottom()));
-                ui.painter_at(subj_rect).text(egui::pos2(x + 2.0, rect.center().y), Align2::LEFT_CENTER, &c.subject, FontId::proportional(13.0), theme::TEXT);
+                ui.painter_at(subj_rect).text(egui::pos2(x + 2.0, rect.center().y), Align2::LEFT_CENTER, &c.subject, FontId::proportional(13.0), theme::TEXT());
                 let ax = right - date_w - sha_w - author_w;
                 let av = egui::Rect::from_center_size(egui::pos2(ax + 8.0, rect.center().y), Vec2::splat(16.0));
                 p.rect_filled(av, 3, theme::avatar_color(&c.author));
                 p.text(av.center(), Align2::CENTER_CENTER, initials(&c.author), FontId::new(8.5, theme::semibold()), Color32::WHITE);
                 ui.painter_at(egui::Rect::from_min_max(egui::pos2(ax + 20.0, rect.top()), egui::pos2(ax + author_w - 6.0, rect.bottom())))
-                    .text(egui::pos2(ax + 22.0, rect.center().y), Align2::LEFT_CENTER, &c.author, FontId::proportional(12.5), theme::TEXT);
-                p.text(egui::pos2(right - date_w - sha_w, rect.center().y), Align2::LEFT_CENTER, &c.short, FontId::monospace(12.0), theme::TEXT_DIM);
-                p.text(egui::pos2(right - date_w, rect.center().y), Align2::LEFT_CENTER, &c.date, FontId::proportional(12.5), theme::TEXT_DIM);
+                    .text(egui::pos2(ax + 22.0, rect.center().y), Align2::LEFT_CENTER, &c.author, FontId::proportional(12.5), theme::TEXT());
+                p.text(egui::pos2(right - date_w - sha_w, rect.center().y), Align2::LEFT_CENTER, &c.short, FontId::monospace(12.0), theme::TEXT_DIM());
+                p.text(egui::pos2(right - date_w, rect.center().y), Align2::LEFT_CENTER, &c.date, FontId::proportional(12.5), theme::TEXT_DIM());
                 if resp.clicked() {
                     acts.push(Act::SelectCommit(i));
                 }
@@ -980,7 +1382,7 @@ impl App {
                 let subject = c.subject.clone();
                 let parents = c.parents.len();
                 let head = head.clone();
-                resp.context_menu(|ui| commit_menu(ui, cmds, acts, &sha, &short, &subject, parents, &head));
+                resp.context_menu(|ui| commit_menu(ui, cmds, acts, &sha, &short, &subject, parents, &head, &commit_customs));
             }
         });
     }
@@ -992,6 +1394,7 @@ impl App {
         let mut hunk: Option<(String, bool, bool)> = None;
         let mut do_commit = false;
         let mut flat = self.flat_files;
+        let (low, high, guide) = (self.p.subject_low, self.p.subject_high, self.p.page_guide);
         {
             let cmds = &self.cmds;
             let r = &mut self.tabs[self.active];
@@ -1000,12 +1403,25 @@ impl App {
             let has_head = !r.commits.is_empty();
             let root = r.path.clone();
 
-            egui::Panel::left("changes_files").resizable(true).default_size(380.0).min_size(280.0).frame(egui::Frame::new().fill(theme::PANEL).inner_margin(0)).show(ui, |ui| {
+            egui::Panel::left("changes_files").resizable(true).default_size(380.0).min_size(280.0).frame(egui::Frame::new().fill(theme::PANEL()).inner_margin(0)).show(ui, |ui| {
                 // Commit composer at the bottom
-                egui::Panel::bottom("commit_box").resizable(false).frame(egui::Frame::new().fill(theme::PANEL_DARK).inner_margin(egui::Margin::same(10))).show(ui, |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut r.commit_msg).hint_text(tr("Commit subject", "Commit-Titel")).desired_width(f32::INFINITY));
+                egui::Panel::bottom("commit_box").resizable(false).frame(egui::Frame::new().fill(theme::PANEL_DARK()).inner_margin(egui::Margin::same(10))).show(ui, |ui| {
+                    let subj = ui.add(egui::TextEdit::singleline(&mut r.commit_msg).hint_text(tr("Commit subject", "Commit-Titel")).desired_width(f32::INFINITY));
+                    // Length indicator (Preferences > Commit): fine up to the low limit, warn up to the high one.
+                    let len = r.commit_msg.chars().count();
+                    if len > 0 {
+                        let col = if len <= low { theme::GREEN() } else if len <= high { theme::ORANGE() } else { theme::RED() };
+                        ui.painter().text(subj.rect.right_center() - Vec2::new(8.0, 0.0), Align2::RIGHT_CENTER, len.to_string(), FontId::proportional(11.0), col);
+                    }
                     ui.add_space(2.0);
-                    ui.add(egui::TextEdit::multiline(&mut r.commit_desc).hint_text(tr("Description (optional)", "Beschreibung (optional)")).desired_rows(3).desired_width(f32::INFINITY));
+                    let desc = ui.add(egui::TextEdit::multiline(&mut r.commit_desc).hint_text(tr("Description (optional)", "Beschreibung (optional)")).desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+                    // Page guide at the configured column.
+                    let cw = ui.fonts_mut(|f| f.glyph_width(&egui::TextStyle::Monospace.resolve(ui.style()), 'm'));
+                    let gx = desc.rect.left() + 4.0 + cw * guide as f32;
+                    if gx < desc.rect.right() - 4.0 {
+                        ui.painter().line_segment([egui::pos2(gx, desc.rect.top() + 3.0), egui::pos2(gx, desc.rect.bottom() - 3.0)], Stroke::new(1.0, theme::LINE()));
+                    }
+                    let ctrl_enter = (subj.has_focus() || desc.has_focus()) && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter));
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut r.amend, tr("Amend last commit", "Letzten Commit ändern")).on_hover_text(tr(
@@ -1022,21 +1438,21 @@ impl App {
                     } else {
                         trs(format!("Commit {} file{}", staged.len(), if staged.len() == 1 { "" } else { "s" }), format!("{} Datei{} committen", staged.len(), if staged.len() == 1 { "" } else { "en" }))
                     };
-                    let btn = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if can { theme::ACCENT_DARK } else { Color32::from_rgb(0x36, 0x36, 0x39) }).min_size(Vec2::new(ui.available_width(), 28.0));
+                    let btn = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if can { theme::ACCENT_DARK() } else { theme::dk(0x36, 0x36, 0x39) }).min_size(Vec2::new(ui.available_width(), 28.0));
                     let resp = ui.add_enabled(can, btn).on_disabled_hover_text(tr("Stage files and enter a subject first", "Erst Dateien vormerken und einen Titel eingeben"));
-                    if resp.clicked() {
+                    if resp.clicked() || (ctrl_enter && can) {
                         do_commit = true;
                     }
                     // Subtle: what will run
                     let preview = commit_preview(&r.commit_msg, &r.commit_desc, r.amend);
                     ui.add_space(3.0);
-                    ui.label(RichText::new(preview).monospace().size(10.5).color(theme::TEXT_FAINT));
+                    ui.label(RichText::new(preview).monospace().size(10.5).color(theme::TEXT_FAINT()));
                 });
 
                 // Tree / list switch.
                 egui::Frame::new().inner_margin(egui::Margin { left: 12, right: 8, top: 6, bottom: 2 }).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(tr("Show as", "Anzeigen als")).size(11.5).color(theme::TEXT_FAINT));
+                        ui.label(RichText::new(tr("Show as", "Anzeigen als")).size(11.5).color(theme::TEXT_FAINT()));
                         if ui.selectable_label(!flat, RichText::new(tr("Tree", "Baum")).size(11.5)).on_hover_text(tr("Files grouped by folder; act on a whole folder", "Dateien nach Ordnern; Aktionen für ganze Ordner")).clicked() {
                             flat = false;
                         }
@@ -1046,11 +1462,11 @@ impl App {
                         if !flat {
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 let all: Vec<&str> = r.status.iter().map(|f| f.path.as_str()).collect();
-                                if ui.add(egui::Button::new(RichText::new(tr("Collapse all", "Alle zuklappen")).size(11.0).color(theme::TEXT_DIM)).frame(false)).clicked() {
+                                if ui.add(egui::Button::new(RichText::new(tr("Collapse all", "Alle zuklappen")).size(11.0).color(theme::TEXT_DIM())).frame(false)).clicked() {
                                     tree::set_all(ui.ctx(), "unstaged", &all, false);
                                     tree::set_all(ui.ctx(), "staged", &all, false);
                                 }
-                                if ui.add(egui::Button::new(RichText::new(tr("Expand all", "Alle aufklappen")).size(11.0).color(theme::TEXT_DIM)).frame(false)).clicked() {
+                                if ui.add(egui::Button::new(RichText::new(tr("Expand all", "Alle aufklappen")).size(11.0).color(theme::TEXT_DIM())).frame(false)).clicked() {
                                     tree::set_all(ui.ctx(), "unstaged", &all, true);
                                     tree::set_all(ui.ctx(), "staged", &all, true);
                                 }
@@ -1079,10 +1495,10 @@ impl App {
                 });
             });
 
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL_DARK).inner_margin(0)).show(ui, |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL_DARK()).inner_margin(0)).show(ui, |ui| {
                 let Some((path, staged_sel)) = r.sel_file.clone() else {
                     ui.centered_and_justified(|ui| {
-                        ui.label(RichText::new(tr("Select a file to see its changes", "Wähle eine Datei, um ihre Änderungen zu sehen")).color(theme::TEXT_DIM));
+                        ui.label(RichText::new(tr("Select a file to see its changes", "Wähle eine Datei, um ihre Änderungen zu sehen")).color(theme::TEXT_DIM()));
                     });
                     return;
                 };
@@ -1090,17 +1506,17 @@ impl App {
                 let untracked = r.status.iter().any(|f| f.path == path && f.index == '?');
                 let code = r.status.iter().find(|f| f.path == path).map(|f| if staged_sel { f.index } else if f.index == '?' { '?' } else { f.worktree }).unwrap_or('M');
                 // File header bar
-                egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::symmetric(12, 7)).show(ui, |ui| {
+                egui::Frame::new().fill(theme::PANEL()).inner_margin(egui::Margin::symmetric(12, 7)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         status_badge(ui, code);
                         let (file, dir) = split_path(&path);
-                        ui.label(RichText::new(file).font(FontId::new(13.0, theme::semibold())).color(theme::TEXT_STRONG));
+                        ui.label(RichText::new(file).font(FontId::new(13.0, theme::semibold())).color(theme::TEXT_STRONG()));
                         if !dir.is_empty() {
-                            ui.label(RichText::new(dir).size(12.0).color(theme::TEXT_DIM));
+                            ui.label(RichText::new(dir).size(12.0).color(theme::TEXT_DIM()));
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(RichText::new(if staged_sel { tr("Staged", "Vorgemerkt") } else { tr("Unstaged", "Nicht vorgemerkt") }).size(11.5).color(theme::TEXT_FAINT));
+                            ui.label(RichText::new(if staged_sel { tr("Staged", "Vorgemerkt") } else { tr("Unstaged", "Nicht vorgemerkt") }).size(11.5).color(theme::TEXT_FAINT()));
                         });
                     });
                 });
@@ -1120,7 +1536,7 @@ impl App {
                             ui.horizontal(|ui| {
                                 ui.add_space(8.0);
                                 let (_, _, ctxs) = pd.hunk_info.get(hi).cloned().unwrap_or_default();
-                                ui.label(RichText::new(if ctxs.is_empty() { trs(format!("Hunk {}", hi + 1), format!("Abschnitt {}", hi + 1)) } else { ctxs }).size(11.5).color(theme::TEXT_FAINT));
+                                ui.label(RichText::new(if ctxs.is_empty() { trs(format!("Hunk {}", hi + 1), format!("Abschnitt {}", hi + 1)) } else { ctxs }).size(11.5).color(theme::TEXT_FAINT()));
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     ui.add_space(8.0);
                                     let patch = format!("{}{}", pd.header, h);
@@ -1189,7 +1605,14 @@ impl App {
             r.commit_msg.clear();
             r.commit_desc.clear();
             r.amend = false;
-            self.quick(tr("Commit", "Commit").into(), args, ctx);
+            if self.repo_settings().signoff {
+                args.push("--signoff".into());
+            }
+            if self.p.push_on_commit {
+                self.quick_sequence(tr("Commit and push", "Committen und pushen").into(), vec![args, vec!["push".into()]], ctx);
+            } else {
+                self.quick(tr("Commit", "Commit").into(), args, ctx);
+            }
         }
     }
 
@@ -1201,8 +1624,8 @@ impl App {
         ui.add_space((ui.available_height() * 0.16).max(30.0));
         ui.vertical_centered(|ui| {
             ui.set_max_width(w);
-            ui.label(RichText::new("YAGUI").font(FontId::new(30.0, theme::semibold())).color(theme::TEXT_STRONG));
-            ui.label(RichText::new(tr("A friendly Git client", "Ein freundlicher Git-Client")).size(14.0).color(theme::TEXT_DIM));
+            ui.label(RichText::new("YAGUI").font(FontId::new(30.0, theme::semibold())).color(theme::TEXT_STRONG()));
+            ui.label(RichText::new(tr("A friendly Git client", "Ein freundlicher Git-Client")).size(14.0).color(theme::TEXT_DIM()));
             ui.add_space(26.0);
         });
         ui.horizontal(|ui| {
@@ -1216,11 +1639,11 @@ impl App {
             ] {
                 let (rect, resp) = ui.allocate_exact_size(Vec2::new(176.0, 104.0), Sense::click());
                 let p = ui.painter_at(rect);
-                p.rect_filled(rect, 6, if resp.hovered() { Color32::from_rgb(0x36, 0x36, 0x39) } else { Color32::from_rgb(0x30, 0x30, 0x32) });
-                p.rect_stroke(rect, 6, Stroke::new(1.0, if resp.hovered() { theme::ACCENT_DARK } else { theme::LINE }), egui::StrokeKind::Inside);
-                icons::draw(&p, egui::Rect::from_center_size(rect.center_top() + Vec2::new(0.0, 30.0), Vec2::splat(24.0)), ic, theme::ACCENT);
-                p.text(rect.center() + Vec2::new(0.0, 12.0), Align2::CENTER_CENTER, title, FontId::new(14.0, theme::semibold()), theme::TEXT_STRONG);
-                p.text(rect.center() + Vec2::new(0.0, 32.0), Align2::CENTER_CENTER, desc, FontId::proportional(11.5), theme::TEXT_DIM);
+                p.rect_filled(rect, 6, if resp.hovered() { theme::dk(0x36, 0x36, 0x39) } else { theme::dk(0x30, 0x30, 0x32) });
+                p.rect_stroke(rect, 6, Stroke::new(1.0, if resp.hovered() { theme::ACCENT_DARK() } else { theme::LINE() }), egui::StrokeKind::Inside);
+                icons::draw(&p, egui::Rect::from_center_size(rect.center_top() + Vec2::new(0.0, 30.0), Vec2::splat(24.0)), ic, theme::ACCENT());
+                p.text(rect.center() + Vec2::new(0.0, 12.0), Align2::CENTER_CENTER, title, FontId::new(14.0, theme::semibold()), theme::TEXT_STRONG());
+                p.text(rect.center() + Vec2::new(0.0, 32.0), Align2::CENTER_CENTER, desc, FontId::proportional(11.5), theme::TEXT_DIM());
                 if resp.clicked() {
                     acts.push(match a {
                         0 => Act::OpenRepoDialog,
@@ -1242,7 +1665,7 @@ impl App {
                 ui.add_space(((ui.available_width() - widths) / 2.0).max(0.0));
                 for (i, (label, act)) in links.into_iter().enumerate() {
                     if i > 0 {
-                        ui.label(RichText::new("·").color(theme::TEXT_FAINT));
+                        ui.label(RichText::new("·").color(theme::TEXT_FAINT()));
                     }
                     if ui.link(RichText::new(label).size(12.5)).clicked() {
                         acts.push(act);
@@ -1254,7 +1677,7 @@ impl App {
         if !self.recent.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.set_max_width(w);
-                ui.label(RichText::new(tr("Recent repositories", "Zuletzt geöffnet")).font(FontId::new(12.5, theme::semibold())).color(theme::TEXT_DIM));
+                ui.label(RichText::new(tr("Recent repositories", "Zuletzt geöffnet")).font(FontId::new(12.5, theme::semibold())).color(theme::TEXT_DIM()));
                 ui.add_space(4.0);
                 for r in self.recent.clone().into_iter().take(8) {
                     let name = std::path::Path::new(&r).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| r.clone());
@@ -1288,15 +1711,15 @@ fn commit_preview(msg: &str, desc: &str, amend: bool) -> String {
 fn empty_hint(ui: &mut egui::Ui, text: &str) {
     ui.horizontal(|ui| {
         ui.add_space(14.0);
-        ui.label(RichText::new(text).size(12.0).color(theme::TEXT_FAINT));
+        ui.label(RichText::new(text).size(12.0).color(theme::TEXT_FAINT()));
     });
 }
 
 fn file_section_header(ui: &mut egui::Ui, title: &str, count: usize, action: Option<(&str, &str)>, mut on_click: impl FnMut()) {
     ui.horizontal(|ui| {
         ui.add_space(12.0);
-        ui.label(RichText::new(title).font(FontId::new(12.5, theme::semibold())).color(theme::TEXT));
-        ui.label(RichText::new(count.to_string()).size(11.5).color(theme::TEXT_FAINT));
+        ui.label(RichText::new(title).font(FontId::new(12.5, theme::semibold())).color(theme::TEXT()));
+        ui.label(RichText::new(count.to_string()).size(11.5).color(theme::TEXT_FAINT()));
         if let Some((label, cmd)) = action {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(8.0);
@@ -1367,7 +1790,7 @@ fn folder_stage_args(dir: &str, staged: bool, has_head: bool) -> (String, Vec<St
 #[allow(clippy::too_many_arguments)]
 fn folder_menu(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, dir: &str, count: usize, staged: bool, has_head: bool, any_tracked: bool, any_untracked: bool, root: &std::path::Path, salt: &str, paths: &[&str]) {
     ui.set_min_width(250.0);
-    ui.label(RichText::new(trs(format!("{dir}  ·  {count} files"), format!("{dir}  ·  {count} Dateien"))).size(11.5).color(theme::TEXT_FAINT));
+    ui.label(RichText::new(trs(format!("{dir}  ·  {count} files"), format!("{dir}  ·  {count} Dateien"))).size(11.5).color(theme::TEXT_FAINT()));
     ui.separator();
     let (title, args) = folder_stage_args(dir, staged, has_head);
     let label = if staged { tr("Unstage folder", "Ordner zurücknehmen") } else { tr("Stage folder", "Ordner vormerken") };
@@ -1414,9 +1837,9 @@ fn file_row(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, f: &F
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::click());
     let p = ui.painter_at(rect);
     if selected {
-        p.rect_filled(rect, 0, theme::ROW_SEL);
+        p.rect_filled(rect, 0, theme::ROW_SEL());
     } else if resp.hovered() {
-        p.rect_filled(rect, 0, theme::ROW_HOVER);
+        p.rect_filled(rect, 0, theme::ROW_HOVER());
     }
     // status badge
     let br = egui::Rect::from_center_size(egui::pos2(rect.left() + 22.0 + indent, rect.center().y), Vec2::splat(13.0));
@@ -1435,19 +1858,19 @@ fn file_row(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, f: &F
     let action_w = if resp.hovered() || selected { 30.0 } else { 0.0 };
     let clip = egui::Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(rect.right() - 8.0 - action_w, rect.bottom()));
     let pc = ui.painter_at(clip);
-    let g = pc.layout_no_wrap(file.to_string(), FontId::proportional(13.0), theme::TEXT);
+    let g = pc.layout_no_wrap(file.to_string(), FontId::proportional(13.0), theme::TEXT());
     let gw = g.size().x;
-    pc.galley(egui::pos2(x, rect.center().y - g.size().y / 2.0), g, theme::TEXT);
+    pc.galley(egui::pos2(x, rect.center().y - g.size().y / 2.0), g, theme::TEXT());
     if !dir.is_empty() {
-        pc.text(egui::pos2(x + gw + 8.0, rect.center().y), Align2::LEFT_CENTER, dir, FontId::proportional(11.5), theme::TEXT_FAINT);
+        pc.text(egui::pos2(x + gw + 8.0, rect.center().y), Align2::LEFT_CENTER, dir, FontId::proportional(11.5), theme::TEXT_FAINT());
     }
     // hover action: stage / unstage
     let mut action_clicked = false;
     if action_w > 0.0 {
         let ar = egui::Rect::from_center_size(egui::pos2(rect.right() - 20.0, rect.center().y), Vec2::new(22.0, 18.0));
         let hovered = resp.hover_pos().map(|p| ar.contains(p)).unwrap_or(false);
-        p.rect_filled(ar, 4, if hovered { Color32::from_rgb(0x4a, 0x4a, 0x4f) } else { Color32::from_rgb(0x3a, 0x3a, 0x3d) });
-        icons::draw(&p, ar.shrink(4.0), if staged { Icon::Close } else { Icon::Plus }, theme::TEXT_STRONG);
+        p.rect_filled(ar, 4, if hovered { theme::dk(0x4a, 0x4a, 0x4f) } else { theme::dk(0x3a, 0x3a, 0x3d) });
+        icons::draw(&p, ar.shrink(4.0), if staged { Icon::Close } else { Icon::Plus }, theme::TEXT_STRONG());
         if resp.clicked() && hovered {
             action_clicked = true;
         }
@@ -1508,81 +1931,188 @@ fn file_row(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, f: &F
     });
 }
 
-fn branch_menu(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, name: &str, upstream: &str, head: &str, remote: bool) {
+/// What a branch's right-click menu needs besides the branch itself.
+pub(super) struct BranchExtra {
+    /// (remote, URL of a new pull request for this branch)
+    pub pr: Option<(String, String)>,
+    pub remote_branches: Vec<String>,
+    pub customs: Vec<(usize, super::extra::CustomCmd)>,
+    pub pinned: bool,
+    pub filtered: bool,
+    pub hidden: bool,
+}
+
+/// The page that starts a pull request for `branch` on a hosting site.
+fn pr_url(web: &str, branch: &str) -> String {
+    if web.contains("gitlab") {
+        format!("{web}/-/merge_requests/new?merge_request[source_branch]={branch}")
+    } else if web.contains("bitbucket") {
+        format!("{web}/pull-requests/new?source={branch}")
+    } else if web.contains("dev.azure.com") || web.contains("visualstudio.com") {
+        format!("{web}/pullrequestcreate?sourceRef={branch}")
+    } else {
+        format!("{web}/compare/{branch}?expand=1")
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn branch_menu(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, name: &str, upstream: &str, head: &str, remote: bool, extra: &BranchExtra) {
     let n = name.to_string();
     if remote {
         menu_cmd(ui, cmds, acts, "checkout_track", Some(&trs(format!("Checkout {n}…"), format!("{n} auschecken…"))), vec![("branch", n.clone())]);
+        menu_cmd(ui, cmds, acts, "worktree_add", Some(tr("Checkout as Worktree…", "Als Worktree auschecken…")), vec![("branch", n.clone())]);
         ui.separator();
-        menu_cmd(ui, cmds, acts, "merge", Some(&trs(format!("Merge {n} into {head}…"), format!("{n} in {head} zusammenführen…"))), vec![("branch", n.clone())]);
+        menu_cmd(ui, cmds, acts, "pull", Some(&trs(format!("Pull into {head}…"), format!("In {head} pullen…"))), vec![]);
+        menu_cmd(ui, cmds, acts, "merge", Some(&trs(format!("Merge into {head}…"), format!("In {head} zusammenführen…"))), vec![("branch", n.clone())]);
         menu_cmd(ui, cmds, acts, "rebase", Some(&trs(format!("Rebase {head} on {n}…"), format!("{head} auf {n} neu aufsetzen…"))), vec![("branch", n.clone())]);
-        menu_cmd(ui, cmds, acts, "branch_create", Some(tr("New branch from here…", "Neuer Branch von hier…")), vec![("commit", n.clone())]);
+        menu_item(ui, acts, &trs(format!("Interactively Rebase {head} on {n}…"), format!("{head} interaktiv auf {n} neu aufsetzen…")), Act::Rebase(n.clone()));
+        if let Some((rn, url)) = &extra.pr {
+            if ui.button(trs(format!("Create Pull Request on '{rn}'"), format!("Pull Request auf '{rn}' erstellen"))).clicked() {
+                super::auth::open_url(url);
+                ui.close();
+            }
+        }
+        ui.separator();
+        menu_item(ui, acts, tr("New Branch…", "Neuer Branch…"), Act::NewBranch(Some(n.clone())));
+        menu_item(ui, acts, tr("New Tag…", "Neuer Tag…"), Act::NewTag(Some(n.clone())));
         ui.separator();
         if let Some((r, b)) = n.split_once('/') {
             menu_cmd(ui, cmds, acts, "push_delete", Some(&trs(format!("Delete {n}…"), format!("{n} löschen…"))), vec![("remote", r.to_string()), ("branch", b.to_string())]);
         }
+        menu_item(ui, acts, if extra.filtered { tr("Stop filtering", "Filter aufheben") } else { tr("Show Only This Branch", "Nur diesen Branch zeigen") }, Act::FilterBranch(n.clone()));
     } else {
         let is_head = n == head;
         if !is_head {
-            menu_cmd(ui, cmds, acts, "switch", Some(&trs(format!("Checkout {n}"), format!("{n} auschecken"))), vec![("branch", n.clone())]);
+            menu_cmd(ui, cmds, acts, "switch", Some(&trs(format!("Checkout {n}…"), format!("{n} auschecken…"))), vec![("branch", n.clone())]);
+        }
+        menu_cmd(ui, cmds, acts, "worktree_add", Some(tr("Checkout as Worktree…", "Als Worktree auschecken…")), vec![("branch", n.clone())]);
+        if !upstream.is_empty() {
+            if is_head {
+                menu_cmd(ui, cmds, acts, "merge", Some(&trs(format!("Fast-Forward to '{upstream}'"), format!("Vorspulen auf '{upstream}'"))), vec![("branch", upstream.to_string()), ("flag:--ff-only", "1".into())]);
+                menu_cmd(ui, cmds, acts, "pull", Some(&trs(format!("Pull '{upstream}'…"), format!("'{upstream}' pullen…"))), vec![]);
+            } else {
+                let b = ui.button(trs(format!("Fast-Forward to '{upstream}'"), format!("Vorspulen auf '{upstream}'")));
+                if tip_with_cmd(b, tr("Moves this branch forward without checking it out", "Bewegt diesen Branch vorwärts, ohne ihn auszuchecken"), &format!("git fetch . {upstream}:{n}")).clicked() {
+                    acts.push(Act::Quick { title: trs(format!("Fast-forward {n}"), format!("{n} vorspulen")), args: vec!["fetch".into(), ".".into(), format!("{upstream}:{n}")], explain: String::new() });
+                    ui.close();
+                }
+            }
+        }
+        let remote_name = upstream.split_once('/').map(|x| x.0.to_string()).unwrap_or_else(|| "origin".into());
+        menu_cmd(ui, cmds, acts, "push", Some(&trs(format!("Push to '{remote_name}'…"), format!("Nach '{remote_name}' pushen…"))), vec![("branch", n.clone())]);
+        if let Some((rn, url)) = &extra.pr {
+            if ui.button(trs(format!("Create Pull Request on '{rn}'"), format!("Pull Request auf '{rn}' erstellen"))).clicked() {
+                super::auth::open_url(url);
+                ui.close();
+            }
+        }
+        if !is_head {
             ui.separator();
             menu_cmd(ui, cmds, acts, "merge", Some(&trs(format!("Merge {n} into {head}…"), format!("{n} in {head} zusammenführen…"))), vec![("branch", n.clone())]);
             menu_cmd(ui, cmds, acts, "rebase", Some(&trs(format!("Rebase {head} on {n}…"), format!("{head} auf {n} neu aufsetzen…"))), vec![("branch", n.clone())]);
-            ui.separator();
+            menu_item(ui, acts, &trs(format!("Interactively Rebase {head} on {n}…"), format!("{head} interaktiv auf {n} neu aufsetzen…")), Act::Rebase(n.clone()));
         }
-        menu_cmd(ui, cmds, acts, "push", Some(&trs(format!("Push {n}…"), format!("{n} pushen…"))), vec![("branch", n.clone())]);
-        if !upstream.is_empty() && is_head {
-            menu_cmd(ui, cmds, acts, "pull", Some(&trs(format!("Pull from {upstream}…"), format!("Pull von {upstream}…"))), vec![]);
-        }
-        menu_cmd(ui, cmds, acts, "branch_upstream", None, vec![("branch", n.clone())]);
         ui.separator();
-        menu_cmd(ui, cmds, acts, "branch_create", Some(tr("New branch from here…", "Neuer Branch von hier…")), vec![("commit", n.clone())]);
-        menu_cmd(ui, cmds, acts, "tag_create", Some(tr("New tag here…", "Neuer Tag hier…")), vec![("commit", n.clone())]);
+        menu_item(ui, acts, tr("New Branch…", "Neuer Branch…"), Act::NewBranch(Some(n.clone())));
+        menu_item(ui, acts, tr("New Tag…", "Neuer Tag…"), Act::NewTag(Some(n.clone())));
+        ui.menu_button(tr("Tracking", "Verbindung zum Server"), |ui| {
+            if !upstream.is_empty() {
+                menu_cmd(ui, cmds, acts, "branch_unset_upstream", Some(tr("Remove tracking reference", "Verbindung lösen")), vec![("branch", n.clone())]);
+                ui.separator();
+            }
+            ui.set_max_height(360.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for rb in &extra.remote_branches {
+                    if rb.ends_with("/HEAD") {
+                        continue;
+                    }
+                    if ui.radio(rb == upstream, rb).clicked() && rb != upstream {
+                        acts.push(Act::Quick { title: trs(format!("Track {rb}"), format!("Mit {rb} verbinden")), args: vec!["branch".into(), format!("--set-upstream-to={rb}"), n.clone()], explain: String::new() });
+                        ui.close();
+                    }
+                }
+            });
+        });
         menu_cmd(ui, cmds, acts, "branch_rename", Some(tr("Rename…", "Umbenennen…")), vec![("branch", n.clone())]);
-        if !is_head {
+        ui.add_enabled_ui(!is_head, |ui| {
             menu_cmd(ui, cmds, acts, "branch_delete", Some(tr("Delete…", "Löschen…")), vec![("branch", n.clone())]);
+        });
+        ui.separator();
+        menu_item(ui, acts, if extra.pinned { tr("Unpin", "Nicht mehr anheften") } else { tr("Pin to Top", "Oben anheften") }, Act::PinBranch(n.clone()));
+        menu_item(ui, acts, if extra.filtered { tr("Stop filtering", "Filter aufheben") } else { tr("Show Only This Branch", "Nur diesen Branch zeigen") }, Act::FilterBranch(n.clone()));
+        menu_item(ui, acts, if extra.hidden { tr("Show in Commit List", "In der Commit-Liste zeigen") } else { tr("Hide from Commit List", "In der Commit-Liste ausblenden") }, Act::HideBranch(n.clone()));
+    }
+    if !extra.customs.is_empty() {
+        ui.separator();
+        for (i, cc) in &extra.customs {
+            if ui.button(&cc.name).on_hover_text(&cc.command).clicked() {
+                acts.push(Act::Custom(*i, n.clone()));
+                ui.close();
+            }
         }
     }
     ui.separator();
-    menu_item(ui, acts, tr("Copy name", "Namen kopieren"), Act::Copy(n));
+    menu_item(ui, acts, tr("Copy Branch Name", "Branch-Namen kopieren"), Act::Copy(n));
 }
 
 #[allow(clippy::too_many_arguments)]
-fn commit_menu(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, sha: &str, short: &str, subject: &str, parents: usize, head: &str) {
+fn commit_menu(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, sha: &str, short: &str, subject: &str, parents: usize, head: &str, customs: &[(usize, super::extra::CustomCmd)]) {
     let s = sha.to_string();
-    menu_cmd(ui, cmds, acts, "checkout", Some(&trs(format!("Checkout {short}…"), format!("{short} auschecken…"))), vec![("branch", s.clone())]);
-    menu_cmd(ui, cmds, acts, "branch_create", Some(tr("New branch here…", "Neuer Branch hier…")), vec![("commit", s.clone())]);
-    menu_cmd(ui, cmds, acts, "tag_create", Some(tr("New tag here…", "Neuer Tag hier…")), vec![("commit", s.clone())]);
+    menu_item(ui, acts, tr("New Branch…", "Neuer Branch…"), Act::NewBranch(Some(short.to_string())));
+    menu_item(ui, acts, tr("New Tag…", "Neuer Tag…"), Act::NewTag(Some(short.to_string())));
     ui.separator();
-    menu_cmd(ui, cmds, acts, "cherry_pick", Some(tr("Cherry-pick…", "Cherry-Pick…")), vec![("commits", s.clone())]);
+    ui.menu_button(tr("Interactive Rebase", "Interaktiver Rebase"), |ui| {
+        menu_item(ui, acts, &trs(format!("Interactively Rebase '{head}' to Here…"), format!("'{head}' ab hier interaktiv neu aufsetzen…")), Act::Rebase(s.clone()));
+        ui.separator();
+        ui.label(RichText::new(tr("Quick Actions", "Schnellaktionen")).size(11.5).color(theme::TEXT_FAINT()));
+        ui.add_enabled_ui(parents <= 1, |ui| {
+            menu_item(ui, acts, tr("Reword…", "Beschreibung ändern…"), Act::RebaseAction(s.clone(), 1));
+            menu_item(ui, acts, tr("Edit…", "Bearbeiten…"), Act::RebaseAction(s.clone(), 2));
+            menu_item(ui, acts, tr("Squash into Parent…", "Mit Vorgänger zusammenfassen…"), Act::RebaseAction(s.clone(), 3));
+            menu_item(ui, acts, tr("Fixup into Parent…", "In Vorgänger einschmelzen…"), Act::RebaseAction(s.clone(), 4));
+            menu_item(ui, acts, tr("Drop…", "Entfernen…"), Act::RebaseAction(s.clone(), 5));
+        });
+    });
+    menu_cmd(ui, cmds, acts, "reset", Some(&trs(format!("Reset '{head}' to Here…"), format!("'{head}' hierher zurücksetzen…"))), vec![("commit", s.clone())]);
+    menu_cmd(ui, cmds, acts, "checkout", Some(tr("Checkout Commit…", "Commit auschecken…")), vec![("branch", s.clone())]);
+    menu_cmd(ui, cmds, acts, "cherry_pick", Some(tr("Cherry-pick Commit…", "Commit übernehmen (Cherry-pick)…")), vec![("commits", s.clone())]);
     let mut rv: Vec<(&'static str, String)> = vec![("commits", s.clone())];
     if parents > 1 {
         rv.push(("parent", "1".into()));
     }
-    menu_cmd(ui, cmds, acts, "revert", Some(tr("Revert…", "Revert…")), rv);
-    menu_cmd(ui, cmds, acts, "reset", Some(&trs(format!("Reset {head} to here…"), format!("{head} hierher zurücksetzen…"))), vec![("commit", s.clone())]);
-    menu_item(ui, acts, &trs(format!("Interactive rebase {head} from here…"), format!("Interaktiver Rebase ab hier…")), Act::Rebase(s.clone()));
-    menu_cmd(ui, cmds, acts, "rebase", Some(&trs(format!("Rebase {head} onto here…"), format!("{head} hierauf neu aufsetzen…"))), vec![("branch", s.clone())]);
-    menu_cmd(ui, cmds, acts, "merge", Some(&trs(format!("Merge into {head}…"), format!("In {head} zusammenführen…"))), vec![("branch", s.clone())]);
+    menu_cmd(ui, cmds, acts, "revert", Some(tr("Revert Commit…", "Commit rückgängig machen (Revert)…")), rv);
     ui.separator();
-    menu_cmd(ui, cmds, acts, "format_patch", Some(tr("Save as patch…", "Als Patch speichern…")), vec![("range", format!("-1 {short}"))]);
-    menu_cmd(ui, cmds, acts, "diff", Some(tr("Compare with working tree…", "Mit Arbeitsordner vergleichen…")), vec![("a", s.clone())]);
-    menu_cmd(ui, cmds, acts, "notes_add", Some(tr("Add note…", "Notiz hinzufügen…")), vec![("commit", s.clone())]);
+    menu_cmd(ui, cmds, acts, "merge", Some(&trs(format!("Merge into '{head}'…"), format!("In '{head}' zusammenführen…"))), vec![("branch", s.clone())]);
+    menu_cmd(ui, cmds, acts, "rebase", Some(&trs(format!("Rebase '{head}' onto Here…"), format!("'{head}' hierauf neu aufsetzen…"))), vec![("branch", s.clone())]);
     ui.separator();
-    menu_item(ui, acts, tr("Copy SHA", "SHA kopieren"), Act::Copy(s.clone()));
-    menu_item(ui, acts, tr("Copy message", "Beschreibung kopieren"), Act::Copy(subject.to_string()));
+    menu_cmd(ui, cmds, acts, "format_patch", Some(tr("Save as Patch…", "Als Patch speichern…")), vec![("range", format!("-1 {short}"))]);
+    menu_cmd(ui, cmds, acts, "diff", Some(tr("Compare to Local Changes…", "Mit lokalen Änderungen vergleichen…")), vec![("a", s.clone())]);
+    menu_cmd(ui, cmds, acts, "notes_add", Some(tr("Add Note…", "Notiz hinzufügen…")), vec![("commit", s.clone())]);
+    if !customs.is_empty() {
+        ui.separator();
+        for (i, cc) in customs {
+            if ui.button(&cc.name).on_hover_text(&cc.command).clicked() {
+                acts.push(Act::Custom(*i, s.clone()));
+                ui.close();
+            }
+        }
+    }
+    ui.separator();
+    menu_item(ui, acts, tr("Copy Commit SHA", "Commit-SHA kopieren"), Act::Copy(s.clone()));
+    menu_item(ui, acts, tr("Copy Commit Info", "Commit-Info kopieren"), Act::Copy(format!("{short} {subject}")));
 }
 
-fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>) {
-    egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin { left: 14, right: 14, top: 6, bottom: 0 }).show(ui, |ui| {
+fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>, rules: &[super::extra::IssueRule]) {
+    egui::Frame::new().fill(theme::PANEL()).inner_margin(egui::Margin { left: 14, right: 14, top: 6, bottom: 0 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 18.0;
             for (t, label) in [(DetailTab::Commit, tr("Commit", "Commit")), (DetailTab::Changes, tr("Changes", "Änderungen")), (DetailTab::Tree, tr("File Tree", "Dateibaum"))] {
                 let sel = r.detail_tab == t;
-                let txt = RichText::new(label).font(FontId::new(13.0, theme::semibold())).color(if sel { theme::ACCENT } else { theme::TEXT_DIM });
+                let txt = RichText::new(label).font(FontId::new(13.0, theme::semibold())).color(if sel { theme::ACCENT() } else { theme::TEXT_DIM() });
                 let resp = ui.add(egui::Button::new(txt).frame(false));
                 if sel {
                     let rr = resp.rect;
-                    ui.painter().line_segment([rr.left_bottom() + Vec2::new(0.0, 5.0), rr.right_bottom() + Vec2::new(0.0, 5.0)], Stroke::new(2.0, theme::ACCENT));
+                    ui.painter().line_segment([rr.left_bottom() + Vec2::new(0.0, 5.0), rr.right_bottom() + Vec2::new(0.0, 5.0)], Stroke::new(2.0, theme::ACCENT()));
                 }
                 if resp.clicked() {
                     acts.push(Act::DetailTab(t));
@@ -1592,10 +2122,10 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>) {
         ui.add_space(5.0);
     });
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().rect_filled(rect, 0, theme::LINE);
+    ui.painter().rect_filled(rect, 0, theme::LINE());
     let Some(d) = &r.detail else {
         ui.add_space(10.0);
-        ui.label(RichText::new(tr("Select a commit", "Wähle einen Commit")).color(theme::TEXT_DIM));
+        ui.label(RichText::new(tr("Select a commit", "Wähle einen Commit")).color(theme::TEXT_DIM()));
         return;
     };
     match r.detail_tab {
@@ -1609,16 +2139,16 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>) {
                         ui.add_space(4.0);
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(&d.author).font(FontId::new(13.5, theme::semibold())).color(theme::TEXT_STRONG));
-                                ui.label(RichText::new(&d.email).size(12.0).color(theme::TEXT_DIM));
+                                ui.label(RichText::new(&d.author).font(FontId::new(13.5, theme::semibold())).color(theme::TEXT_STRONG()));
+                                ui.label(RichText::new(&d.email).size(12.0).color(theme::TEXT_DIM()));
                             });
-                            ui.label(RichText::new(&d.date).size(12.0).color(theme::TEXT_DIM));
+                            ui.label(RichText::new(&d.date).size(12.0).color(theme::TEXT_DIM()));
                         });
                     });
                     ui.add_space(8.0);
                     egui::Grid::new("meta").num_columns(2).spacing([16.0, 5.0]).show(ui, |ui| {
                         let key = |ui: &mut egui::Ui, t: &str| {
-                            ui.label(RichText::new(t).size(11.5).color(theme::TEXT_FAINT));
+                            ui.label(RichText::new(t).size(11.5).color(theme::TEXT_FAINT()));
                         };
                         if !d.refs.is_empty() {
                             key(ui, tr("Refs", "Refs"));
@@ -1650,35 +2180,83 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>) {
                     });
                     ui.add_space(10.0);
                     let mut lines = d.message.lines();
-                    ui.label(RichText::new(lines.next().unwrap_or("")).font(FontId::new(15.0, theme::semibold())).color(theme::TEXT_STRONG));
+                    ui.label(RichText::new(lines.next().unwrap_or("")).font(FontId::new(15.0, theme::semibold())).color(theme::TEXT_STRONG()));
                     let rest: String = lines.collect::<Vec<_>>().join("\n");
                     if !rest.trim().is_empty() {
                         ui.add_space(4.0);
                         ui.label(RichText::new(rest.trim()).size(12.5));
                     }
+                    let links = super::extra::issue_links(rules, &d.message);
+                    if !links.is_empty() {
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(tr("Issues:", "Issues:")).size(12.0).color(theme::TEXT_DIM()));
+                            for (t, u) in links {
+                                if ui.link(t).on_hover_text(&u).clicked() {
+                                    super::auth::open_url(&u);
+                                }
+                            }
+                        });
+                    }
                     ui.add_space(12.0);
-                    ui.label(RichText::new(trs(format!("{} changed files", d.files.len()), format!("{} geänderte Dateien", d.files.len()))).size(11.5).color(theme::TEXT_FAINT));
+                    let all_key = Id::unique(("expand-all", &d.sha));
+                    let mut expand_all = ui.ctx().data(|m| m.get_temp::<bool>(all_key)).unwrap_or(false);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(trs(format!("{} changed files", d.files.len()), format!("{} geänderte Dateien", d.files.len()))).size(11.5).color(theme::TEXT_FAINT()));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(egui::Button::new(RichText::new(if expand_all { tr("Collapse All", "Alle zuklappen") } else { tr("Expand All", "Alle aufklappen") }).size(12.0)).frame(false)).clicked() {
+                                expand_all = !expand_all;
+                                ui.ctx().data_mut(|m| m.insert_temp(all_key, expand_all));
+                                for (_, path) in &d.files {
+                                    ui.ctx().data_mut(|m| m.insert_temp(Id::unique(("file-open", &d.sha, path)), expand_all));
+                                }
+                            }
+                        });
+                    });
                     ui.add_space(2.0);
                     for (st, path) in &d.files {
                         let code = st.chars().next().unwrap_or('M');
+                        let open_key = Id::unique(("file-open", &d.sha, path));
+                        let is_open = ui.ctx().data(|m| m.get_temp::<bool>(open_key)).unwrap_or(false);
                         let resp = ui.horizontal(|ui| {
+                            if icon_button(ui, if is_open { Icon::ChevronDown } else { Icon::ChevronRight }, tr("Show the changes here", "Änderungen hier zeigen")).clicked() {
+                                ui.ctx().data_mut(|m| m.insert_temp(open_key, !is_open));
+                            }
                             status_badge(ui, code);
                             let (file, dir) = split_path(path);
                             let r = ui.add(egui::Button::new(RichText::new(file).size(13.0)).frame(false));
                             if !dir.is_empty() {
-                                ui.label(RichText::new(dir).size(11.5).color(theme::TEXT_FAINT));
+                                ui.label(RichText::new(dir).size(11.5).color(theme::TEXT_FAINT()));
                             }
                             r
                         }).inner;
                         if resp.on_hover_text(status_word(code)).clicked() {
                             acts.push(Act::DetailFile(path.clone()));
                         }
+                        if is_open {
+                            let cache = Id::unique(("file-diff", &d.sha, path));
+                            let diff = match ui.ctx().data(|m| m.get_temp::<String>(cache)) {
+                                Some(t) => t,
+                                None => {
+                                    let t = git::commit_file_diff(&r.path, &d.sha, path);
+                                    ui.ctx().data_mut(|m| m.insert_temp(cache, t.clone()));
+                                    t
+                                }
+                            };
+                            egui::Frame::new().fill(theme::PANEL_DARK()).stroke(Stroke::new(1.0, theme::LINE())).corner_radius(3).inner_margin(egui::Margin::symmetric(0, 4)).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                let pd = git::parse_diff(&diff);
+                                diff_facts(ui, &pd);
+                                diff_body(ui, &diff);
+                            });
+                            ui.add_space(4.0);
+                        }
                     }
                 });
             });
         }
         DetailTab::Changes => {
-            egui::Panel::left("detail_files").resizable(true).default_size(260.0).frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::symmetric(4, 6))).show(ui, |ui| {
+            egui::Panel::left("detail_files").resizable(true).default_size(260.0).frame(egui::Frame::new().fill(theme::PANEL()).inner_margin(egui::Margin::symmetric(4, 6))).show(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("dfiles").auto_shrink([false; 2]).show(ui, |ui| {
                     let paths: Vec<&str> = d.files.iter().map(|f| f.1.as_str()).collect();
                     let ctx = ui.ctx().clone();
@@ -1707,16 +2285,16 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>) {
                     }
                 });
             });
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL_DARK).inner_margin(egui::Margin::symmetric(0, 6))).show(ui, |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL_DARK()).inner_margin(egui::Margin::symmetric(0, 6))).show(ui, |ui| {
                 if r.detail_file.is_some() {
                     diff_view(ui, &r.detail_diff, "ddiff");
                 } else {
-                    ui.label(RichText::new(tr("Select a file", "Wähle eine Datei")).color(theme::TEXT_DIM));
+                    ui.label(RichText::new(tr("Select a file", "Wähle eine Datei")).color(theme::TEXT_DIM()));
                 }
             });
         }
         DetailTab::Tree => {
-            egui::Panel::left("tree_files").resizable(true).default_size(300.0).frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::symmetric(4, 6))).show(ui, |ui| {
+            egui::Panel::left("tree_files").resizable(true).default_size(300.0).frame(egui::Frame::new().fill(theme::PANEL()).inner_margin(egui::Margin::symmetric(4, 6))).show(ui, |ui| {
                 // The whole tree of the commit: folders start closed, so big projects stay fast.
                 let paths: Vec<&str> = r.tree.iter().map(|s| s.as_str()).collect();
                 let ctx = ui.ctx().clone();
@@ -1740,11 +2318,38 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>) {
                     }
                 });
             });
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL_DARK).inner_margin(10)).show(ui, |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL_DARK()).inner_margin(10)).show(ui, |ui| {
                 egui::ScrollArea::both().id_salt("tcontent").auto_shrink([false; 2]).show(ui, |ui| {
                     ui.add(egui::Label::new(RichText::new(&r.tree_content).monospace().size(12.0)).extend());
                 });
             });
         }
     }
+}
+
+/// Escapes regex characters so `git log -G` looks for the literal text.
+fn regex_escape(s: &str) -> String {
+    let mut o = String::new();
+    for ch in s.chars() {
+        if "\\.^$|?*+()[]{}".contains(ch) {
+            o.push('\\');
+        }
+        o.push(ch);
+    }
+    o
+}
+
+/// The small ▾ next to a toolbar button that opens its menu.
+fn dropdown_arrow(ui: &mut egui::Ui, enabled: bool, tip: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(14.0, 40.0), if enabled { Sense::click() } else { Sense::hover() });
+    let p = ui.painter_at(rect);
+    if resp.hovered() && enabled {
+        p.rect_filled(rect.shrink2(Vec2::new(0.0, 6.0)), 3, theme::ROW_HOVER());
+    }
+    icons::draw(&p, egui::Rect::from_center_size(rect.center() + Vec2::new(0.0, -4.0), Vec2::splat(9.0)), Icon::ChevronDown, if enabled { theme::TEXT_DIM() } else { theme::TEXT_FAINT() });
+    resp.on_hover_text(tip)
+}
+
+fn short_label(s: &str) -> String {
+    if s.chars().count() > 10 { format!("{}…", s.chars().take(9).collect::<String>()) } else { s.to_string() }
 }
