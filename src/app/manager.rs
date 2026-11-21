@@ -487,6 +487,8 @@ impl App {
                 ui.add_space(4.0);
                 let ws = self.workspaces.get(self.ws).map(|w| w.name.clone()).unwrap_or_default();
                 let r = ui.add(egui::Label::new(RichText::new(ws).font(FontId::new(13.5, theme::semibold())).color(theme::TEXT_STRONG())).sense(Sense::click()));
+                icon(ui, Icon::ChevronDown, 9.0, theme::TEXT_DIM());
+                let r = r.on_hover_text(tr("Switch or configure workspaces", "Workspace wechseln oder einrichten"));
                 egui::Popup::menu(&r).show(|ui| self.workspace_menu(ui, acts));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if icon_button(ui, Icon::Plus, tr("Repository Manager – open or add repositories", "Repository Manager – Repositories öffnen oder hinzufügen")).clicked() {

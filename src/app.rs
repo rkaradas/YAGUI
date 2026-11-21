@@ -91,6 +91,10 @@ pub struct Repo {
     search_hits: Option<std::collections::HashSet<String>>,
     /// Local branches, most recently committed first (sidebar sort "Recently used").
     branch_recency: Vec<String>,
+    /// (stash@{n}, commit) of every stash.
+    stash_shas: Vec<(String, String)>,
+    /// The stash picked in the sidebar (highlighted there).
+    stash_sel: Option<String>,
 }
 
 impl Repo {
@@ -137,6 +141,8 @@ impl Repo {
             search_mode: 0,
             search_hits: None,
             branch_recency: vec![],
+            stash_shas: vec![],
+            stash_sel: None,
         };
         r.refresh();
         if !r.commits.is_empty() {
@@ -162,7 +168,21 @@ impl Repo {
         if flags & (git::RELOAD_HEAD | git::RELOAD_REFS | git::RELOAD_REFTABLE) != 0 {
             self.head = git::head_name(&p);
             let sel_sha = self.selected.and_then(|i| self.commits.get(i)).map(|c| c.sha.clone());
+            let stashes = git::stash_commits(&p);
+            self.log_opts.stash_tips = stashes.iter().map(|s| s.1.clone()).collect();
             self.commits = git::load_commits(&p, 3000, &self.log_opts);
+            // Show every stash as one row labelled stash@{n} and leave out
+            // Git's helper commits ("index on …", "untracked files on …").
+            let helpers: std::collections::HashSet<&String> = stashes.iter().flat_map(|s| s.2.iter().skip(1)).collect();
+            self.commits.retain(|c| !helpers.contains(&c.sha));
+            for c in self.commits.iter_mut() {
+                if let Some(s) = stashes.iter().find(|s| s.1 == c.sha) {
+                    c.parents.truncate(1);
+                    c.refs.retain(|r| r != "refs/stash");
+                    c.refs.insert(0, s.0.clone());
+                }
+            }
+            self.stash_shas = stashes.iter().map(|s| (s.0.clone(), s.1.clone())).collect();
             let (rows, lanes) = graph::layout(&self.commits);
             self.rows = rows;
             self.lanes = lanes.min(14);
@@ -369,6 +389,8 @@ enum Act {
     StashPatch(String),
     /// Interactive-rebase quick action on one commit: 1 reword, 2 edit, 3 squash, 4 fixup, 5 drop.
     RebaseAction(String, usize),
+    /// A stash clicked in the sidebar: select it in the history and show its changes.
+    SelectStash(String),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -628,6 +650,10 @@ impl App {
             Ok("accounts") => app.creds = Some(auth::CredState::new()),
             Ok("prefs") => app.prefs = Some(auth::PrefsState::new()),
             Ok("manager") => app.open_manager(),
+            Ok("stash") => {
+                let ctx = cc.egui_ctx.clone();
+                app.apply(vec![Act::SelectStash("stash@{0}".into())], &ctx);
+            }
             Ok("stats") => {
                 let p = app.tabs.get(app.active).map(|t| t.path.clone());
                 app.open_manager();
@@ -1019,9 +1045,13 @@ impl App {
 // The frame
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.frames += 1;
+        // The taskbar icon: set again over the first frames (the window may appear late).
+        if matches!(self.frames, 2 | 30 | 120) {
+            crate::winicon::apply(frame);
+        }
         self.poll_jobs();
         self.handle_screenshot(&ctx);
 
@@ -1207,6 +1237,7 @@ impl App {
                 }
                 Act::SelectCommit(i) => {
                     if let Some(t) = self.tabs.get_mut(self.active) {
+                        t.stash_sel = t.commits.get(i).and_then(|c| c.refs.iter().find(|r| r.starts_with("stash@")).cloned());
                         t.select_commit(i);
                     }
                 }
@@ -1383,6 +1414,27 @@ impl App {
                     self.mgr.rename = Some((p, n));
                 }
                 Act::StaleBranches => self.open_stale(),
+                Act::SelectStash(name) => {
+                    if let Some(t) = self.tabs.get_mut(self.active) {
+                        t.view = View::Commits;
+                        t.stash_sel = Some(name.clone());
+                        let sha = t.stash_shas.iter().find(|s| s.0 == name).map(|s| s.1.clone()).unwrap_or_else(|| git::run(&t.path, &["rev-parse", &name]).stdout.trim().to_string());
+                        if let Some(i) = t.commits.iter().position(|c| c.sha == sha) {
+                            t.select_commit(i);
+                            t.scroll_to = Some(i);
+                        } else if !sha.is_empty() {
+                            // Hidden from the list (View > Hide Stashes): show its details anyway.
+                            t.selected = None;
+                            t.detail = Some(git::commit_detail(&t.path, &sha));
+                            t.detail_file = None;
+                            t.detail_diff.clear();
+                            t.tree.clear();
+                        }
+                        if t.detail_tab == DetailTab::Tree {
+                            t.detail_tab = DetailTab::Commit;
+                        }
+                    }
+                }
                 Act::RebaseAction(sha, action) => {
                     // Opens the rebase editor with this commit already set (squash/fixup also
                     // list the parent it goes into); nothing runs until it is confirmed there.

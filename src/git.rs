@@ -325,6 +325,8 @@ pub struct LogOptions {
     pub hide_tags: bool,
     /// Preferences > Sort commits: topologically instead of by date.
     pub topo: bool,
+    /// Every stash (not only the newest, which refs/stash points at) as an extra tip.
+    pub stash_tips: Vec<String>,
 }
 
 pub fn log_tip_args(o: &LogOptions) -> Vec<String> {
@@ -346,6 +348,9 @@ pub fn log_tip_args(o: &LogOptions) -> Vec<String> {
             v.push(format!("--exclude=refs/remotes/{h}"));
         }
         v.push("--all".into());
+        if !o.hide_stashes {
+            v.extend(o.stash_tips.iter().cloned());
+        }
     }
     if o.reflog {
         v.push("--reflog".into());
@@ -442,6 +447,19 @@ pub fn load_stashes(dir: &Path) -> Vec<(String, String)> {
     o.stdout
         .lines()
         .filter_map(|l| l.split_once('\x1f').map(|(a, b)| (a.to_string(), b.to_string())))
+        .collect()
+}
+
+/// Each stash: (stash@{n}, commit, its parents). The 2nd and 3rd parents are Git's helper
+/// commits for the index and untracked files.
+pub fn stash_commits(dir: &Path) -> Vec<(String, String, Vec<String>)> {
+    run(dir, &["stash", "list", "--format=%gd%x1f%H%x1f%P"])
+        .stdout
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\x1f').collect();
+            (f.len() >= 3).then(|| (f[0].to_string(), f[1].to_string(), f[2].split_whitespace().map(String::from).collect()))
+        })
         .collect()
 }
 
@@ -633,8 +651,15 @@ pub fn commit_detail(dir: &Path, sha: &str) -> CommitDetail {
     let o = run(dir, &["show", "-s", "--format=%H%x1f%an%x1f%ae%x1f%ad%x1f%cn%x1f%P%x1f%D%x1f%B", "--date=format:%d.%m.%Y %H:%M:%S %z", sha]);
     let f: Vec<&str> = o.stdout.splitn(8, '\x1f').collect();
     let g = |i: usize| f.get(i).map(|s| s.to_string()).unwrap_or_default();
-    let files_out = run(dir, &["diff-tree", "--no-commit-id", "-r", "--name-status", "-M", "--root", sha]);
-    let files = files_out
+    let parents: Vec<String> = g(5).split_whitespace().map(String::from).collect();
+    // Merges and stashes: what changed against the first parent (plain diff-tree shows nothing
+    // for them). A stash's third parent holds its new, untracked files.
+    let files_out = if parents.len() >= 2 {
+        run(dir, &["diff-tree", "--no-commit-id", "-r", "--name-status", "-M", &parents[0], sha])
+    } else {
+        run(dir, &["diff-tree", "--no-commit-id", "-r", "--name-status", "-M", "--root", sha])
+    };
+    let mut files: Vec<(String, String)> = files_out
         .stdout
         .lines()
         .filter_map(|l| {
@@ -644,13 +669,20 @@ pub fn commit_detail(dir: &Path, sha: &str) -> CommitDetail {
             Some((st.chars().next().unwrap_or('M').to_string(), path))
         })
         .collect();
+    if parents.len() == 3 {
+        for p in run(dir, &["ls-tree", "-r", "--name-only", &parents[2]]).stdout.lines() {
+            if !files.iter().any(|f| f.1 == p) {
+                files.push(("A".into(), p.to_string()));
+            }
+        }
+    }
     CommitDetail {
         sha: g(0),
         author: g(1),
         email: g(2),
         date: g(3),
         committer: g(4),
-        parents: g(5).split_whitespace().map(String::from).collect(),
+        parents,
         refs: g(6),
         message: g(7).trim_end().to_string(),
         files,
@@ -658,6 +690,15 @@ pub fn commit_detail(dir: &Path, sha: &str) -> CommitDetail {
 }
 
 pub fn commit_file_diff(dir: &Path, sha: &str, path: &str) -> String {
+    let line = run(dir, &["rev-list", "--parents", "-n1", sha]).stdout;
+    let parents: Vec<&str> = line.split_whitespace().skip(1).collect();
+    if parents.len() >= 2 {
+        let d = run(dir, &["diff", "-M", parents[0], sha, "--", path]).stdout;
+        if d.trim().is_empty() && parents.len() == 3 {
+            return run(dir, &["show", "--format=", parents[2], "--", path]).stdout;
+        }
+        return d;
+    }
     run(dir, &["show", "--format=", "-M", sha, "--", path]).stdout
 }
 

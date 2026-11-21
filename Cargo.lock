@@ -4368,9 +4368,11 @@ dependencies = [
  "eframe",
  "embed-resource",
  "image",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

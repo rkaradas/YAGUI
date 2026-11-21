@@ -9,6 +9,7 @@ mod graph;
 mod i18n;
 mod icons;
 mod theme;
+mod winicon;
 
 use std::path::PathBuf;
 
@@ -25,8 +26,10 @@ fn main() -> eframe::Result<()> {
         }
     }
 
+    winicon::set_app_id();
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("YAGUI")
+        .with_app_id("YAGUI.GitClient")
         .with_icon(std::sync::Arc::new(eframe::egui::IconData { rgba: appicon::icon_pixels(64), width: 64, height: 64 }))
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([900.0, 560.0]);

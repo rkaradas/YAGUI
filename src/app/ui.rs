@@ -62,6 +62,29 @@ fn tool_button(ui: &mut egui::Ui, i: Icon, label: &str, what: &str, cmd: &str, e
     tip_with_cmd(resp, what, cmd)
 }
 
+/// A toolbar button that opens a menu: like `tool_button`, with a small arrow next to the
+/// icon so it is clear there is more behind it.
+fn tool_button_menu(ui: &mut egui::Ui, i: Icon, label: &str, what: &str, cmd: &str, enabled: bool) -> egui::Response {
+    let resp = tool_button(ui, i, label, what, cmd, enabled);
+    let p = ui.painter_at(resp.rect);
+    let c = resp.rect.center_top() + Vec2::new(15.0, 16.0);
+    icons::draw(&p, egui::Rect::from_center_size(c, Vec2::splat(8.0)), Icon::ChevronDown, if enabled { theme::TEXT_DIM() } else { theme::TEXT_FAINT() });
+    resp
+}
+
+/// A small text button with an arrow, for menus inside panels (e.g. "View options").
+fn menu_text_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let g = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(12.0), theme::TEXT_DIM());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 26.0, 22.0), Sense::click());
+    let p = ui.painter_at(rect);
+    if resp.hovered() {
+        p.rect_filled(rect, 4, theme::ROW_HOVER());
+    }
+    p.galley(egui::pos2(rect.left() + 7.0, rect.center().y - g.size().y / 2.0), g, theme::TEXT_DIM());
+    icons::draw(&p, egui::Rect::from_center_size(egui::pos2(rect.right() - 10.0, rect.center().y), Vec2::splat(9.0)), Icon::ChevronDown, theme::TEXT_DIM());
+    resp
+}
+
 fn separator_v(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(13.0, 30.0), Sense::hover());
     ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, theme::LINE()));
@@ -593,10 +616,10 @@ impl App {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // Workspaces
                     let ws_name = self.workspaces.get(self.ws).map(|w| w.name.clone()).unwrap_or_default();
-                    let b = tool_button(ui, Icon::Cube, &short_label(&ws_name), tr("Workspace: each one keeps its own open repositories", "Workspace: jeder hat seine eigenen offenen Repositories"), "", true);
+                    let b = tool_button_menu(ui, Icon::Cube, &short_label(&ws_name), tr("Workspace: each one keeps its own open repositories", "Workspace: jeder hat seine eigenen offenen Repositories"), "", true);
                     egui::Popup::menu(&b).show(|ui| self.workspace_menu(ui, acts));
                     // Appearance
-                    let b = tool_button(ui, Icon::Theme, tr("Appearance", "Darstellung"), tr("Theme and commit list layout", "Farbschema und Anordnung der Commit-Liste"), "", true);
+                    let b = tool_button_menu(ui, Icon::Theme, tr("Appearance", "Darstellung"), tr("Theme and commit list layout", "Farbschema und Anordnung der Commit-Liste"), "", true);
                     egui::Popup::menu(&b).show(|ui| {
                         ui.label(RichText::new(tr("Theme", "Farbschema")).size(11.5).color(theme::TEXT_FAINT()));
                         if ui.radio(theme::is_light(), tr("Light", "Hell")).clicked() {
@@ -634,7 +657,7 @@ impl App {
                     if tool_button(ui, Icon::Terminal, tr("Console", "Konsole"), tr("Open a terminal in this repository (Ctrl+Alt+T)", "Terminal in diesem Repository öffnen (Strg+Alt+T)"), "", has).clicked() {
                         acts.push(Act::Terminal);
                     }
-                    let b = tool_button(ui, Icon::Folder, tr("Open in", "Öffnen in"), tr("Open the folder in another program", "Ordner in einem anderen Programm öffnen"), "", has);
+                    let b = tool_button_menu(ui, Icon::Folder, tr("Open in", "Öffnen in"), tr("Open the folder in another program", "Ordner in einem anderen Programm öffnen"), "", has);
                     if has {
                         egui::Popup::menu(&b).show(|ui| self.open_in_menu(ui));
                     }
@@ -1089,11 +1112,14 @@ impl App {
                 ui.add_space(2.0);
                 if section(ui, "stashes", tr("Stashes", "Stashes"), r.stashes.len(), false) {
                     for (name, msg) in r.stashes.iter().filter(|s| matches(&s.1)) {
-                        let resp = list_row(ui, Some(Icon::Stash), msg, false, "", false, 8.0).on_hover_text(name);
+                        let sel = r.stash_sel.as_deref() == Some(name.as_str());
+                        let resp = list_row(ui, Some(Icon::Stash), msg, false, "", sel, 8.0).on_hover_text(trs(format!("{name}\nClick to see its changes · double-click to apply"), format!("{name}\nKlicken zeigt die Änderungen · Doppelklick wendet ihn an")));
                         let name = name.clone();
                         let cmds = &self.cmds;
                         if resp.double_clicked() {
                             acts.push(Act::Open("stash_apply", vec![("stash", name.clone())]));
+                        } else if resp.clicked() {
+                            acts.push(Act::SelectStash(name.clone()));
                         }
                         resp.context_menu(|ui| {
                             menu_cmd(ui, cmds, acts, "stash_apply", None, vec![("stash", name.clone())]);
@@ -1242,7 +1268,8 @@ impl App {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let before = (r.log_opts.hide_stashes, r.log_opts.reflog, r.log_opts.first_parent, r.log_opts.only.clone());
-                    ui.menu_button(RichText::new(tr("View options", "Anzeige")).size(12.0).color(theme::TEXT_DIM()), |ui| {
+                    let vb = menu_text_button(ui, tr("View options", "Anzeige"));
+                    egui::Popup::menu(&vb).show(|ui| {
                         ui.checkbox(&mut r.log_opts.hide_stashes, tr("Hide stashes", "Stashes ausblenden"));
                         ui.checkbox(&mut r.log_opts.reflog, tr("Show reflog commits", "Reflog-Commits zeigen"));
                         ui.checkbox(&mut r.log_opts.hide_tags, tr("Hide tags", "Tags ausblenden"));
@@ -1342,6 +1369,8 @@ impl App {
                         (b.to_string(), Some(Icon::Check), theme::dk(0x3a, 0x3a, 0x3d), theme::ORANGE(), theme::TEXT_STRONG())
                     } else if let Some(t) = rf.strip_prefix("tag: ") {
                         (t.to_string(), Some(Icon::Tag), theme::dk(0x3a, 0x34, 0x22), Color32::from_rgb(0x6a, 0x5a, 0x2a), theme::YELLOW())
+                    } else if rf.starts_with("stash@") {
+                        (rf.clone(), Some(Icon::Stash), theme::dk(0x33, 0x30, 0x3d), theme::dk(0x55, 0x4c, 0x6a), theme::TEXT())
                     } else if rf == "HEAD" {
                         ("HEAD".to_string(), None, theme::dk(0x3a, 0x3a, 0x3d), theme::ORANGE(), theme::TEXT_STRONG())
                     } else if r.local.iter().any(|b| &b.name == rf) {
