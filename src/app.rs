@@ -2297,12 +2297,12 @@ impl App {
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
-                .default_size([700.0, 680.0])
+                .default_size([700.0, 680.0]).min_height((ctx.content_rect().height() - 160.0).clamp(300.0, 640.0))
                 .max_height(ctx.content_rect().height() - 80.0)
                 .pivot(Align2::CENTER_CENTER)
                 .default_pos(ctx.content_rect().center())
                 .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().id_salt("dlg_scroll").show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("dlg_scroll").auto_shrink([false; 2]).show(ui, |ui| {
                         act = form_ui(ui, &self.cmds, &mut f, &sug, &self.jobs, true, &line, &args);
                     });
                 });
