@@ -1058,3 +1058,38 @@ pub fn all() -> Vec<Cmd> {
 pub fn find(list: &[Cmd], id: &str) -> usize {
     list.iter().position(|c| c.id == id).unwrap_or_else(|| panic!("unknown command {id}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(id: &str, setup: impl Fn(&Cmd, &mut Vec<Value>)) -> String {
+        let l = all();
+        let c = &l[find(&l, id)];
+        let mut v = default_values(c);
+        setup(c, &mut v);
+        command_line(&build_args(c, &v, ""))
+    }
+
+    #[test]
+    fn commands_build_expected_lines() {
+        assert_eq!(line("merge", |c, v| { set_choice(c, v, "--no-ff"); set_text(c, v, "branch", "feature/x"); }), "git merge --no-ff feature/x");
+        assert_eq!(line("commit", |c, v| set_text(c, v, "message", "Erster Commit")), "git commit -m \"Erster Commit\"");
+        assert_eq!(line("reset", |c, v| { set_choice(c, v, "--hard"); set_text(c, v, "commit", "HEAD~1"); }), "git reset --hard HEAD~1");
+        assert_eq!(line("clean", |_, _| {}), "git clean -n");
+        assert_eq!(line("config_alias", |c, v| { set_text(c, v, "name", "co"); set_text(c, v, "value", "checkout"); }), "git config alias.co checkout");
+        assert_eq!(line("stash_push", |c, v| set_text(c, v, "paths", "a.txt b.txt")), "git stash push -- a.txt b.txt");
+        assert_eq!(line("fetch", |_, _| {}), "git fetch --prune");
+        assert_eq!(line("rm", |c, v| { set_flag(c, v, "--cached", true); set_text(c, v, "paths", "x.log"); }), "git rm --cached -- x.log");
+    }
+
+    #[test]
+    fn ids_are_unique() {
+        let l = all();
+        let mut ids: Vec<&str> = l.iter().map(|c| c.id).collect();
+        ids.sort();
+        let n = ids.len();
+        ids.dedup();
+        assert_eq!(n, ids.len());
+    }
+}

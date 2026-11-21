@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Align, Align2, Color32, FontId, Id, Layout, RichText, Sense, Stroke, Vec2};
 
-use crate::catalog::{self, Arg, Cat, Cmd, Danger, Kind, Value, CATS, P};
+use crate::catalog::{self, Arg, Cmd, Danger, Kind, Value, CATS, P};
 use crate::git::{self, Commit, CommitDetail, FileStatus, Job, JobSpec, JobState, RefInfo};
 use crate::graph;
 use crate::theme;
@@ -2293,7 +2293,7 @@ impl App {
             let args = self.form_args(&f);
             let line = self.display_line(&f);
             egui::Window::new(RichText::new("Git-Befehl").strong())
-                .id(Id::new("cmd_dialog"))
+                .id(Id::unique("cmd_dialog"))
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
@@ -2333,7 +2333,7 @@ impl App {
             let c = &self.cmds[f.cmd];
             let line = self.display_line(&f);
             let mut decision: Option<bool> = None;
-            let modal = egui::Modal::new(Id::new("confirm")).show(ctx, |ui| {
+            let modal = egui::Modal::new(Id::unique("confirm")).show(ctx, |ui| {
                 ui.set_max_width(520.0);
                 ui.label(RichText::new("⚠ Bist du sicher?").heading().color(theme::RED));
                 ui.add_space(4.0);
@@ -2380,7 +2380,7 @@ impl App {
             let mut run = false;
             let mut cancel = false;
             egui::Window::new(RichText::new("Interaktiver Rebase – Commits bearbeiten").strong())
-                .id(Id::new("rebase_dialog"))
+                .id(Id::unique("rebase_dialog"))
                 .open(&mut open)
                 .collapsible(false)
                 .default_width(760.0)
@@ -2465,7 +2465,7 @@ impl App {
         if let Some(mut q) = self.quick.take() {
             let mut chosen: Option<usize> = None;
             let mut close = false;
-            let modal = egui::Modal::new(Id::new("quick")).show(ctx, |ui| {
+            let modal = egui::Modal::new(Id::unique("quick")).show(ctx, |ui| {
                 ui.set_width(620.0);
                 ui.label(RichText::new("Was möchtest du tun?").heading());
                 let resp = ui.add(egui::TextEdit::singleline(&mut q).hint_text("z.B. „branch löschen“, „rückgängig“, „push“, „stash“").desired_width(f32::INFINITY));
