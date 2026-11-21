@@ -71,3 +71,4 @@ pub fn layout(commits: &[Commit]) -> (Vec<Row>, usize) {
     }
     (rows, max)
 }
+// x

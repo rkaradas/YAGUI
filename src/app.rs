@@ -164,6 +164,11 @@ impl Repo {
 
     fn reload_file_diff(&mut self) {
         self.file_diff.clear();
+        if self.sel_file.is_none() && self.view == View::Changes {
+            if let Some(f) = self.status.iter().find(|f| f.unstaged()).or_else(|| self.status.first()) {
+                self.sel_file = Some((f.path.clone(), !f.unstaged()));
+            }
+        }
         if let Some((path, staged)) = self.sel_file.clone() {
             if let Some(f) = self.status.iter().find(|f| f.path == path) {
                 if (staged && f.staged()) || (!staged && f.unstaged()) {
@@ -339,6 +344,26 @@ impl App {
         }
         let lib = catalog::find(&app.cmds, "merge");
         app.lib_form = Some(app.make_form(lib, &[]));
+        // Optional start view / dialog (used for checks and pictures).
+        if let Ok(v) = std::env::var("YAGUI_VIEW") {
+            let view = match v.as_str() {
+                "changes" => Some(View::Changes),
+                "library" => Some(View::Library),
+                "console" => Some(View::Console),
+                "commits" => Some(View::Commits),
+                _ => None,
+            };
+            if let (Some(view), Some(t)) = (view, app.tabs.get_mut(app.active)) {
+                t.view = view;
+                t.reload_file_diff();
+            }
+        }
+        if let Ok(id) = std::env::var("YAGUI_OPEN") {
+            if app.cmds.iter().any(|c| c.id == id) {
+                let id: &'static str = app.cmds.iter().find(|c| c.id == id).unwrap().id;
+                app.open_cmd(id, vec![]);
+            }
+        }
         app
     }
 
@@ -1355,7 +1380,7 @@ impl App {
                 if toolbar_button(ui, "⬇", "Klonen", "Repository von einem Server herunterladen", "git clone <adresse> <ordner>", true).clicked() {
                     acts.push(Act::Open("clone", vec![]));
                 }
-                if toolbar_button(ui, "🔍", "Befehl suchen", "Schnellsuche: jeden Git-Befehl finden (Strg+Umschalt+P)", "", true).clicked() {
+                if toolbar_button(ui, "🔍", "Suchen", "Schnellsuche: jeden Git-Befehl finden (Strg+Umschalt+P)", "", true).clicked() {
                     acts.push(Act::QuickLaunch);
                 }
                 ui.add_space(10.0);
@@ -1387,7 +1412,7 @@ impl App {
                 ui.painter().rect_filled(rect, 6, if resp.hovered() { Color32::from_rgb(0x36, 0x36, 0x38) } else { Color32::from_rgb(0x2c, 0x2c, 0x2e) });
                 if has {
                     ui.painter().text(rect.center_top() + Vec2::new(0.0, 12.0), Align2::CENTER_CENTER, &rname, FontId::proportional(13.5), theme::TEXT);
-                    ui.painter().text(rect.center_bottom() - Vec2::new(0.0, 11.0), Align2::CENTER_CENTER, format!("ᚴ {head}"), FontId::proportional(12.0), theme::TEXT_DIM);
+                    ui.painter().text(rect.center_bottom() - Vec2::new(0.0, 11.0), Align2::CENTER_CENTER, format!("Branch: {head}"), FontId::proportional(12.0), theme::TEXT_DIM);
                 } else {
                     ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Kein Repository geöffnet", FontId::proportional(13.0), theme::TEXT_DIM);
                 }
@@ -1416,7 +1441,7 @@ impl App {
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if toolbar_button(ui, "🧰", "Alle Befehle", "Alle Git-Befehle mit Erklärung", "", true).clicked() {
+                    if toolbar_button(ui, "🧰", "Befehle", "Alle Git-Befehle mit Erklärung", "", true).clicked() {
                         acts.push(Act::View(View::Library));
                     }
                     if toolbar_button(ui, "⌨", "Konsole", "Eigene Git-Befehle eintippen", "", has).clicked() {
@@ -1461,7 +1486,7 @@ impl App {
                     }
                     resp.on_hover_text(t.path.display().to_string());
                 }
-                if ui.add(egui::Button::new("＋").frame(false)).on_hover_text("Weiteres Repository öffnen").clicked() {
+                if ui.add(egui::Button::new("+").frame(false)).on_hover_text("Weiteres Repository öffnen").clicked() {
                     acts.push(Act::OpenRepoDialog);
                 }
             });
@@ -1502,7 +1527,7 @@ impl App {
     }
 
     fn activity_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::bottom("activity").resizable(true).default_size(150.0).min_size(60.0).frame(egui::Frame::new().fill(theme::PANEL_DARK).inner_margin(6)).show(ui, |ui| {
+        egui::Panel::bottom("activity").resizable(true).default_size(120.0).min_size(60.0).frame(egui::Frame::new().fill(theme::PANEL_DARK).inner_margin(6)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("AKTIVITÄT – jeder ausgeführte Git-Befehl mit Ergebnis").size(11.0).strong().color(theme::TEXT_DIM));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1577,7 +1602,13 @@ impl App {
             ];
             for (v, label, tip) in nav {
                 let sel = r.view == v;
-                let resp = ui.add_sized([ui.available_width(), 24.0], egui::Button::selectable(sel, RichText::new(label).size(13.5)));
+                let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 25.0), Sense::click());
+                if sel {
+                    ui.painter().rect_filled(rect, 4, Color32::from_rgb(0x37, 0x3a, 0x3f));
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(rect, 4, theme::ROW_HOVER);
+                }
+                ui.painter().text(rect.left_center() + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, label, FontId::proportional(13.5), if sel { Color32::WHITE } else { theme::TEXT });
                 if resp.on_hover_text(tip).clicked() {
                     acts.push(Act::View(v));
                 }
@@ -1651,7 +1682,7 @@ impl App {
                             }
                         });
                     }
-                    if ui.add(egui::Button::new(RichText::new("＋ Remote hinzufügen").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git remote add <name> <adresse>").clicked() {
+                    if ui.add(egui::Button::new(RichText::new("+ Remote hinzufügen").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git remote add <name> <adresse>").clicked() {
                         acts.push(Act::Open("remote_add", vec![]));
                     }
                 });
@@ -1685,7 +1716,7 @@ impl App {
                             }
                         });
                     }
-                    if ui.add(egui::Button::new(RichText::new("＋ Tag erstellen").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git tag <name>").clicked() {
+                    if ui.add(egui::Button::new(RichText::new("+ Tag erstellen").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git tag <name>").clicked() {
                         acts.push(Act::Open("tag_create", vec![]));
                     }
                 });
@@ -1716,7 +1747,7 @@ impl App {
                             }
                         });
                     }
-                    if ui.add(egui::Button::new(RichText::new("＋ Änderungen zwischenlagern").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git stash push").clicked() {
+                    if ui.add(egui::Button::new(RichText::new("+ Änderungen zwischenlagern").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git stash push").clicked() {
                         acts.push(Act::Open("stash_push", vec![]));
                     }
                 });
@@ -1743,7 +1774,7 @@ impl App {
                             }
                         });
                     }
-                    if ui.add(egui::Button::new(RichText::new("＋ Submodul hinzufügen").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git submodule add <adresse>").clicked() {
+                    if ui.add(egui::Button::new(RichText::new("+ Submodul hinzufügen").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git submodule add <adresse>").clicked() {
                         acts.push(Act::Open("submodule_add", vec![]));
                     }
                 });
@@ -1766,7 +1797,7 @@ impl App {
                             }
                         });
                     }
-                    if ui.add(egui::Button::new(RichText::new("＋ Arbeitsordner anlegen").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git worktree add <ordner> <branch>").clicked() {
+                    if ui.add(egui::Button::new(RichText::new("+ Arbeitsordner anlegen").color(theme::TEXT_DIM)).frame(false)).on_hover_text("git worktree add <ordner> <branch>").clicked() {
                         acts.push(Act::Open("worktree_add", vec![]));
                     }
                 });
@@ -1956,7 +1987,7 @@ impl App {
                     let preview = if r.amend {
                         if r.commit_msg.trim().is_empty() { "git commit --amend --no-edit".to_string() } else { format!("git commit --amend -m {}", catalog::quote_for_display(r.commit_msg.trim())) }
                     } else {
-                        format!("git commit -m {}", catalog::quote_for_display(r.commit_msg.trim()))
+                        if r.commit_msg.trim().is_empty() { "git commit -m \"<Beschreibung>\"".to_string() } else { format!("git commit -m {}", catalog::quote_for_display(r.commit_msg.trim())) }
                     };
                     ui.label(RichText::new(preview.lines().next().unwrap_or("")).monospace().size(12.0).color(Color32::from_rgb(0x9f, 0xd1, 0xff)));
                     let can = (!r.commit_msg.trim().is_empty() || r.amend) && (!staged.is_empty() || r.amend);
@@ -1993,7 +2024,7 @@ impl App {
                         });
                     });
                     if staged.is_empty() {
-                        ui.label(RichText::new("Noch nichts vorgemerkt. Klicke bei einer Datei auf ＋.").color(theme::TEXT_DIM));
+                        ui.label(RichText::new("Noch nichts vorgemerkt. Klicke bei einer Datei auf +.").color(theme::TEXT_DIM));
                     }
                     for f in &staged {
                         file_row(ui, acts, f, true, r.sel_file.as_ref() == Some(&(f.path.clone(), true)), has_head);
@@ -2029,7 +2060,7 @@ impl App {
                                         stage_hunk = Some((patch.clone(), true, true));
                                     }
                                 } else {
-                                    if ui.small_button("＋ Abschnitt vormerken").on_hover_text("git apply --cached\nMerkt nur diesen Abschnitt für den Commit vor").clicked() {
+                                    if ui.small_button("+ Abschnitt vormerken").on_hover_text("git apply --cached\nMerkt nur diesen Abschnitt für den Commit vor").clicked() {
                                         stage_hunk = Some((patch.clone(), false, true));
                                     }
                                     if ui.small_button("Abschnitt verwerfen").on_hover_text("git apply --reverse\nVerwirft nur diese Änderung in der Datei – nicht rückgängig zu machen!").clicked() {
@@ -2266,7 +2297,7 @@ impl App {
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
-                .default_width(640.0)
+                .default_size([700.0, 680.0])
                 .max_height(ctx.content_rect().height() - 80.0)
                 .pivot(Align2::CENTER_CENTER)
                 .default_pos(ctx.content_rect().center())
@@ -2573,7 +2604,7 @@ fn file_row(ui: &mut egui::Ui, acts: &mut Vec<Act>, f: &FileStatus, staged: bool
     let code = if staged { f.index } else if f.index == '?' { '?' } else { f.worktree };
     let conflict = f.conflicted();
     ui.horizontal(|ui| {
-        let btn = if staged { "−" } else { "＋" };
+        let btn = if staged { "−" } else { "+" };
         let (tip, args): (String, Vec<String>) = if staged {
             if has_head {
                 (format!("Aus Vormerkung nehmen\ngit restore --staged -- {}", f.path), vec!["restore".into(), "--staged".into(), "--".into(), f.path.clone()])
