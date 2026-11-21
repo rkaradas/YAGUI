@@ -1,7 +1,21 @@
 # Builds YAGUI for Windows, Linux and macOS and publishes a GitHub release.
 #
-# Runs when a version tag is pushed (e.g. `git tag v1.0.0 && git push origin v1.0.0`) or by hand
-# (Actions > Release > Run workflow; then it only builds and keeps the files as artifacts).
+# Runs when a version tag is pushed (e.g. `git tag -a v1.0.0 -m "YAGUI 1.0.0" && git push origin v1.0.0`)
+# or by hand (Actions > Release > Run workflow):
+#   - on a tag v*: the same as pushing the tag, the release is built and published;
+#   - on a branch: only builds and tests; the files are kept as artifacts for 3 days if the
+#     account's artifact storage has room (a full storage does not fail the run).
+#
+# A release needs no artifact storage (release files do not count against it):
+#   1. prepare  checks that the tag matches the version in Cargo.toml, takes the notes for that
+#               version from CHANGELOG.md and creates the release as a draft (or updates the draft).
+#   2. build    builds, tests and packages on each system and uploads the files to the draft.
+#   3. publish  checks that all files are there, adds SHA256SUMS.txt and publishes the release.
+# If a build fails, the release stays a draft (only visible to the owner) and nothing is published.
+# "Re-run failed jobs" continues from there as long as the tag still points to the same commit;
+# after moving the tag, start a new run instead (actions/checkout refuses a moved tag).
+# A published release is never changed: prepare, the uploads and publish stop with an error.
+# To build a published version again, tag a new version (or delete its release first).
 #
 # Release files (the in-app updater looks for these names):
 #   YAGUI-Setup-<v>-windows-x64.exe   installer (the program installs itself; uninstall via Settings > Apps)
@@ -22,24 +36,110 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The repository for `gh`. The token is only given to the steps that talk to GitHub, so build
+  # scripts and tests never see it.
+  GH_REPO: ${{ github.repository }}
+
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Version
+        id: version
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $VERSION"; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Draft release with notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" {on=1; next}
+            on && /^## \[/ {exit}
+            on {print}
+          ' CHANGELOG.md > notes.md
+          {
+            echo
+            echo "### Download"
+            echo "- **Windows:** \`YAGUI-Setup-$VERSION-windows-x64.exe\` installs YAGUI (uninstall via Settings > Apps). \`yagui-$VERSION-windows-x64.exe\` runs without installing."
+            echo "- **macOS:** \`YAGUI-$VERSION-macos-universal.dmg\`, drag YAGUI into Applications. The app is not notarized: macOS blocks the first start; then click \"Open Anyway\" in System Settings > Privacy & Security (macOS 14 and older: right-click > Open)."
+            echo "- **Linux:** \`yagui_${VERSION}_amd64.deb\` (Debian/Ubuntu) or \`yagui-$VERSION-linux-x64.tar.gz\` (run \`./yagui --install\`)."
+            echo
+            echo "Git must be installed. YAGUI checks for updates once a day (Help > Check for Updates)."
+          } >> notes.md
+          # none | true (draft) | false (published); an API error stops the step instead of
+          # being taken for "no release" (that would create a second draft for the tag).
+          state() {
+            gh api graphql \
+              -f query='query($o:String!,$n:String!,$t:String!){repository(owner:$o,name:$n){release(tagName:$t){isDraft}}}' \
+              -f o="${GH_REPO%/*}" -f n="${GH_REPO#*/}" -f t="$GITHUB_REF_NAME" \
+              --jq '.data.repository.release | if . == null then "none" else (.isDraft | tostring) end'
+          }
+          s=$(state)
+          case "$s" in
+            none)
+              gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "YAGUI $GITHUB_REF_NAME" --notes-file notes.md
+              for i in 1 2 3; do
+                s=$(state)
+                if [ "$s" = true ]; then break; fi
+                sleep 5
+              done
+              if [ "$s" != true ]; then echo "::error::The new draft is not found under $GITHUB_REF_NAME ($s)"; exit 1; fi
+              ;;
+            true)
+              gh release edit "$GITHUB_REF_NAME" --title "YAGUI $GITHUB_REF_NAME" --notes-file notes.md
+              ;;
+            false)
+              echo "::error::Release $GITHUB_REF_NAME is already published and is not changed. Tag a new version (or delete the release first)."
+              exit 1
+              ;;
+            *)
+              echo "::error::Unexpected answer from GitHub: $s"; exit 1
+              ;;
+          esac
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
           - os: ubuntu-22.04
-          - os: macos-14
+          - os: macos-15
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Rust
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned to a commit: an action can read the job's token, and @stable is a moving branch.
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # branch stable, 2026-11-21
         with:
+          toolchain: stable
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Linux build dependencies
@@ -47,15 +147,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev
-
-      - name: Version
-        shell: bash
-        run: |
-          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF#refs/tags/v}" != "$VERSION" ]]; then
-            echo "::error::Tag ${GITHUB_REF#refs/tags/} does not match Cargo.toml version $VERSION"; exit 1
-          fi
 
       - name: Test
         if: runner.os != 'macOS'
@@ -72,6 +163,14 @@ jobs:
           cargo build --release --locked --target x86_64-apple-darwin
           mkdir -p target/release
           lipo -create -output target/release/yagui target/aarch64-apple-darwin/release/yagui target/x86_64-apple-darwin/release/yagui
+          # Both halves must be there and start (the x86_64 one through Rosetta, if installed).
+          lipo target/release/yagui -verify_arch arm64 x86_64
+          ./target/release/yagui --version
+          if arch -x86_64 /usr/bin/true 2> /dev/null; then
+            arch -x86_64 ./target/release/yagui --version
+          else
+            echo "::warning::Rosetta is not available, the x86_64 part was not started"
+          fi
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -101,50 +200,85 @@ jobs:
             ./target/release/yagui --write-icon "yagui.iconset/icon_${s}x${s}.png" $s
             ./target/release/yagui --write-icon "yagui.iconset/icon_${s}x${s}@2x.png" $((s*2))
           done
-          iconutil -c icns yagui.iconset -o YAGUI.app/Contents/Resources/yagui.icns
+          iconutil -c icns -o YAGUI.app/Contents/Resources/yagui.icns yagui.iconset
           codesign --force --deep -s - YAGUI.app
-          mkdir dmg && cp -R YAGUI.app dmg/ && ln -s /Applications dmg/Applications
-          hdiutil create -volname "YAGUI $VERSION" -srcfolder dmg -ov -format UDZO "dist/YAGUI-$VERSION-macos-universal.dmg"
+          mkdir dmg
+          cp -R YAGUI.app dmg/
+          ln -s /Applications dmg/Applications
+          # hdiutil on the hosted macOS runners sometimes fails with "Resource busy"
+          # (actions/runner-images#7522); try again with growing pauses.
+          for i in 1 2 3 4 5; do
+            sync
+            hdiutil create -volname "YAGUI $VERSION" -srcfolder dmg -ov -format UDZO "dist/YAGUI-$VERSION-macos-universal.dmg" && break
+            if [ "$i" = 5 ]; then exit 1; fi
+            echo "hdiutil failed, trying again in $((i*15)) seconds"; sleep $((i*15))
+          done
           tar -czf "dist/yagui-$VERSION-macos-universal.tar.gz" -C target/release yagui
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Only ever add files to the draft: "Re-run failed jobs" does not run prepare again.
+          draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)
+          if [ "$draft" != true ]; then
+            echo "::error::Release $GITHUB_REF_NAME is already published; its files are not replaced. Tag a new version."
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
+      - name: Keep as artifact (run by hand on a branch)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
         with:
           name: yagui-${{ runner.os }}
           path: dist/*
+          retention-days: 3
 
-  release:
-    needs: build
+  publish:
+    needs: [prepare, build]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: files
-          merge-multiple: true
-
-      - name: Checksums and release notes
+      - name: Check files, add checksums, publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          (cd files && sha256sum * > SHA256SUMS.txt)
-          awk -v v="$VERSION" '
-            $0 ~ "^## \\[" v "\\]" {on=1; next}
-            on && /^## \[/ {exit}
-            on {print}
-          ' CHANGELOG.md > notes.md
-          {
-            echo
-            echo "### Download"
-            echo "- **Windows:** \`YAGUI-Setup-$VERSION-windows-x64.exe\` installs YAGUI (uninstall via Settings > Apps). \`yagui-$VERSION-windows-x64.exe\` runs without installing."
-            echo "- **macOS:** \`YAGUI-$VERSION-macos-universal.dmg\`, drag YAGUI into Applications. The app is not notarized: open it the first time with right-click > Open."
-            echo "- **Linux:** \`yagui_${VERSION}_amd64.deb\` (Debian/Ubuntu) or \`yagui-$VERSION-linux-x64.tar.gz\` (run \`./yagui --install\`)."
-            echo
-            echo "Git must be installed. YAGUI checks for updates once a day (Help > Check for Updates)."
-          } >> notes.md
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          name: YAGUI ${{ github.ref_name }}
-          body_path: notes.md
-          files: files/*
+          # The tag must still point to what this run built (it may have been moved meanwhile).
+          # GITHUB_SHA is the tagged commit; the tag object of an annotated tag is accepted too.
+          tag_commit=$(gh api "repos/$GH_REPO/commits/tags/$GITHUB_REF_NAME" --jq .sha)
+          tag_object=$(gh api "repos/$GH_REPO/git/ref/tags/$GITHUB_REF_NAME" --jq .object.sha)
+          if [ "$GITHUB_SHA" != "$tag_commit" ] && [ "$GITHUB_SHA" != "$tag_object" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME now points to $tag_commit, this run built $GITHUB_SHA. Nothing published; use the run for the new commit."
+            exit 1
+          fi
+          draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)
+          if [ "$draft" != true ]; then
+            echo "::error::Release $GITHUB_REF_NAME is already published and is not changed."
+            exit 1
+          fi
+          files=(
+            "YAGUI-Setup-$VERSION-windows-x64.exe"
+            "yagui-$VERSION-windows-x64.exe"
+            "yagui_${VERSION}_amd64.deb"
+            "yagui-$VERSION-linux-x64.tar.gz"
+            "YAGUI-$VERSION-macos-universal.dmg"
+            "yagui-$VERSION-macos-universal.tar.gz"
+          )
+          mkdir files && cd files
+          for f in "${files[@]}"; do
+            gh release download "$GITHUB_REF_NAME" --pattern "$f" || { echo "::error::$f is missing in the release"; exit 1; }
+          done
+          sha256sum "${files[@]}" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber
+          # "Latest" only if no newer version is published (a late run for an older tag must not
+          # take it over; the in-app updater reads the latest release).
+          newest=$( { gh release list --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName'; echo "$GITHUB_REF_NAME"; } | sort -V | tail -n 1 )
+          if [ "$newest" = "$GITHUB_REF_NAME" ]; then latest=true; else latest=false; fi
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest="$latest"

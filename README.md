@@ -23,7 +23,7 @@ Download the file for your computer from the
 |---|---|---|
 | Windows | `YAGUI-Setup-<version>-windows-x64.exe` | Run it and click Install (no administrator rights). Uninstall via Settings > Apps or Help > Uninstall YAGUI. |
 | Windows (portable) | `yagui-<version>-windows-x64.exe` | Run it from anywhere. |
-| macOS | `YAGUI-<version>-macos-universal.dmg` | Drag YAGUI into Applications. Not notarized: open it the first time with right-click > Open. |
+| macOS | `YAGUI-<version>-macos-universal.dmg` | Drag YAGUI into Applications. Not notarized: macOS blocks the first start; then click "Open Anyway" in System Settings > Privacy & Security (macOS 14 and older: right-click > Open). |
 | Debian/Ubuntu | `yagui_<version>_amd64.deb` | `sudo apt install ./yagui_<version>_amd64.deb` |
 | Other Linux | `yagui-<version>-linux-x64.tar.gz` | Unpack, then `./yagui --install` (adds a menu entry and the `yagui` command). |
 
@@ -45,7 +45,11 @@ To publish a release:
 1. Set the new version in `Cargo.toml`, add its section to `CHANGELOG.md`, commit.
 2. Create the tag `v<version>` (e.g. `v1.2.0`) and upload the branch and the tag to GitHub.
 3. GitHub Actions (`.github/workflows/release.yml`) builds Windows, Linux and macOS and posts
-   the release with all files and checksums.
+   the release with all files and checksums. Until all three builds have passed, the release
+   stays a draft; after a failure, "Re-run failed jobs" continues (after moving the tag, start a
+   new run instead). A published release is never changed; to build a version again, tag a new
+   one. If the tag push starts no run, start it by hand: Actions > Release > Run workflow, and
+   under "Use workflow from" pick the tag.
 
 ## Build
 
