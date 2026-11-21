@@ -64,6 +64,10 @@ pub struct Repo {
     amend: bool,
     scroll_to: Option<usize>,
     error: Option<String>,
+    log_opts: git::LogOptions,
+    git_dir: Option<PathBuf>,
+    snap: git::Snapshot,
+    locked: Option<&'static str>,
 }
 
 impl Repo {
@@ -102,6 +106,10 @@ impl Repo {
             amend: false,
             scroll_to: None,
             error: None,
+            log_opts: git::LogOptions { all: true, hide_stashes: false, reflog: false },
+            git_dir: None,
+            snap: vec![],
+            locked: None,
         };
         r.refresh();
         if !r.commits.is_empty() {
@@ -117,29 +125,62 @@ impl Repo {
             return;
         }
         self.error = None;
-        self.head = git::head_name(&p);
-        let sel_sha = self.selected.and_then(|i| self.commits.get(i)).map(|c| c.sha.clone());
-        self.commits = git::load_commits(&p, 3000, true);
-        let (rows, lanes) = graph::layout(&self.commits);
-        self.rows = rows;
-        self.lanes = lanes.min(14);
-        let (l, r, t) = git::load_refs(&p);
-        self.local = l;
-        self.remote_branches = r;
-        self.tags = t;
-        self.remotes = git::load_remotes(&p);
-        self.stashes = git::load_stashes(&p);
-        self.submodules = git::load_submodules(&p);
-        self.worktrees = git::load_worktrees(&p);
-        self.status = git::load_status(&p);
-        self.state = git::repo_state(&p);
-        self.selected = sel_sha.and_then(|s| self.commits.iter().position(|c| c.sha == s));
-        if let Some(i) = self.selected {
-            self.select_commit(i);
-        } else {
-            self.detail = None;
+        self.git_dir = git::git_dir(&p);
+        self.reload(u32::MAX);
+    }
+
+    /// Reloads only what a change touched, using the reload flags of the .git folder watch.
+    fn reload(&mut self, flags: u32) {
+        let p = self.path.clone();
+        if flags & (git::RELOAD_HEAD | git::RELOAD_REFS | git::RELOAD_REFTABLE) != 0 {
+            self.head = git::head_name(&p);
+            let sel_sha = self.selected.and_then(|i| self.commits.get(i)).map(|c| c.sha.clone());
+            self.commits = git::load_commits(&p, 3000, self.log_opts);
+            let (rows, lanes) = graph::layout(&self.commits);
+            self.rows = rows;
+            self.lanes = lanes.min(14);
+            let (l, r, t) = git::load_refs(&p);
+            self.local = l;
+            self.remote_branches = r;
+            self.tags = t;
+            self.stashes = git::load_stashes(&p);
+            self.worktrees = git::load_worktrees(&p);
+            self.selected = sel_sha.and_then(|s| self.commits.iter().position(|c| c.sha == s));
+            if let Some(i) = self.selected {
+                self.detail = None;
+                self.select_commit(i);
+            } else {
+                self.detail = None;
+            }
         }
-        self.reload_file_diff();
+        if flags & git::RELOAD_CONFIG != 0 {
+            self.remotes = git::load_remotes(&p);
+            self.submodules = git::load_submodules(&p);
+        }
+        if flags & (git::RELOAD_INDEX | git::RELOAD_IGNORE | git::RELOAD_HEAD | git::RELOAD_STATE) != 0 {
+            self.status = git::load_status(&p);
+            self.reload_file_diff();
+        }
+        if flags & (git::RELOAD_STATE | git::RELOAD_HEAD | git::RELOAD_INDEX) != 0 {
+            self.state = git::repo_state(&p);
+            self.locked = git::repo_locked(&p);
+        }
+        if let Some(g) = &self.git_dir {
+            self.snap = git::snapshot(g);
+        }
+    }
+
+    /// Looks at the watched .git files and reloads the parts that changed.
+    fn poll_changes(&mut self) -> bool {
+        let Some(g) = self.git_dir.clone() else { return false };
+        let now = git::snapshot(&g);
+        let flags = git::changed_flags(&self.snap, &now);
+        if flags != 0 {
+            self.reload(flags);
+            true
+        } else {
+            false
+        }
     }
 
     fn select_commit(&mut self, i: usize) {
@@ -284,7 +325,11 @@ pub struct App {
     was_focused: bool,
     toast: Option<(String, f64)>,
     pending_open: Vec<(u64, PathBuf)>,
+    last_poll: f64,
 }
+
+/// How often the .git files are checked for changes.
+const POLL_SECONDS: f64 = 1.0;
 
 fn state_file() -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
@@ -322,6 +367,7 @@ impl App {
             was_focused: true,
             toast: None,
             pending_open: vec![],
+            last_poll: 0.0,
         };
         let cwd_repo = std::env::current_dir().ok().and_then(|d| git::find_toplevel(&d));
         if let Some(r) = repo.and_then(|r| git::find_toplevel(&r)) {
@@ -746,9 +792,41 @@ fn status_word(c: char) -> &'static str {
 }
 
 fn diff_view(ui: &mut egui::Ui, text: &str, id: &str) {
+    let pd = git::parse_diff(text);
+    diff_facts(ui, &pd);
     egui::ScrollArea::both().id_salt(id).auto_shrink([false; 2]).show(ui, |ui| {
+        if pd.binary {
+            return;
+        }
         diff_lines(ui, text);
     });
+}
+
+/// The header facts of a diff (rename, new/deleted file, mode change, binary) in plain words.
+fn diff_facts(ui: &mut egui::Ui, pd: &git::ParsedDiff) {
+    if pd.facts.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for f in &pd.facts {
+            egui::Frame::new().fill(Color32::from_rgb(0x2a, 0x35, 0x44)).corner_radius(4).inner_margin(egui::Margin::symmetric(6, 2)).show(ui, |ui| {
+                ui.label(RichText::new(f).size(12.0).color(Color32::from_rgb(0xb8, 0xd4, 0xf2)));
+            });
+        }
+    });
+}
+
+fn hunk_label(pd: &git::ParsedDiff, i: usize) -> String {
+    match pd.hunk_info.get(i) {
+        Some((old, new, ctx)) => {
+            let mut s = format!("Abschnitt {} – vorher ab Zeile {old}, jetzt ab Zeile {new}", i + 1);
+            if !ctx.is_empty() {
+                s.push_str(&format!("  ·  in: {ctx}"));
+            }
+            s
+        }
+        None => format!("Abschnitt {}", i + 1),
+    }
 }
 
 fn diff_lines(ui: &mut egui::Ui, text: &str) {
@@ -1074,6 +1152,15 @@ impl eframe::App for App {
             }
         }
         self.was_focused = focused;
+        // Watch the .git folder and reload only what changed.
+        let now = ctx.input(|i| i.time);
+        if now - self.last_poll >= POLL_SECONDS {
+            self.last_poll = now;
+            if let Some(t) = self.tabs.get_mut(self.active) {
+                t.poll_changes();
+            }
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(POLL_SECONDS));
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)) {
             self.quick = Some(String::new());
         }
@@ -1810,7 +1897,27 @@ impl App {
         if let Some(e) = &r.error {
             ui.colored_label(theme::RED, e);
         }
+        if let Some(lock) = r.locked {
+            egui::Frame::new().fill(Color32::from_rgb(0x4a, 0x24, 0x24)).inner_margin(8).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(format!(
+                    "🔒 Das Repository ist gerade gesperrt (.git/{lock}). Ein anderes Git-Programm arbeitet noch daran. Warte kurz – die Anzeige aktualisiert sich von selbst."
+                )).color(Color32::from_rgb(0xf2, 0xa0, 0xa0)));
+            });
+        }
         let Some(st) = r.state else { return };
+        if st == "squash" {
+            egui::Frame::new().fill(Color32::from_rgb(0x4a, 0x3a, 0x16)).inner_margin(8).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("⚠ Ein Squash-Merge hat Änderungen vorbereitet. Prüfe sie und schließe mit einem Commit ab.").color(theme::YELLOW));
+                    if ui.button("Zum Commit").on_hover_text("git commit").clicked() {
+                        acts.push(Act::View(View::Changes));
+                    }
+                });
+            });
+            return;
+        }
         let (text, cont, abort, extra): (&str, Option<&'static str>, Option<&'static str>, Option<&'static str>) = match st {
             "merge" => ("Ein Merge ist im Gange. Löse die Konflikte, merke die Dateien vor und schließe den Merge ab.", Some("merge_continue"), Some("merge_abort"), None),
             "rebase" => ("Ein Rebase ist angehalten (Konflikt oder „bearbeiten“). Danach fortsetzen.", Some("rebase_continue"), Some("rebase_abort"), Some("rebase_skip")),
@@ -1848,6 +1955,18 @@ impl App {
             ui.add_space(8.0);
             ui.add(egui::TextEdit::singleline(&mut r.commit_search).hint_text("🔍 Commits durchsuchen (Text, Autor, SHA)").desired_width(320.0));
             ui.label(RichText::new(format!("{} Commits", r.commits.len())).color(theme::TEXT_DIM));
+            let before = (r.log_opts.hide_stashes, r.log_opts.reflog);
+            ui.checkbox(&mut r.log_opts.hide_stashes, "Stashes ausblenden")
+                .on_hover_text("Lässt den Stash aus dem Verlauf weg\n(git log --exclude=refs/stash --all)");
+            ui.checkbox(&mut r.log_opts.reflog, "Reflog zeigen")
+                .on_hover_text("Zeigt auch Commits, auf die nur noch der Reflog zeigt – z.B. nach Reset oder Rebase\n(git log --reflog)");
+            if before != (r.log_opts.hide_stashes, r.log_opts.reflog) {
+                r.reload(git::RELOAD_REFS);
+            }
+            let tips = git::log_tip_args(r.log_opts).join(" ");
+            ui.label(RichText::new("ⓘ").color(theme::TEXT_DIM)).on_hover_text(format!(
+                "Der Verlauf zeigt:\ngit log --date-order {tips}\n\nInterne Referenzen (refs/bisect/, refs/worktree/, refs/rewritten/) werden ausgelassen."
+            ));
             ui.label(RichText::new("· Rechtsklick auf einen Commit zeigt alle Aktionen").color(theme::TEXT_DIM).size(12.0));
         });
         let q = r.commit_search.to_lowercase();
@@ -2046,14 +2165,15 @@ impl App {
                 });
                 let pd = git::parse_diff(&r.file_diff);
                 let untracked = r.status.iter().any(|f| f.path == path && f.index == '?');
+                diff_facts(ui, &pd);
                 egui::ScrollArea::both().id_salt("wdiff").auto_shrink([false; 2]).show(ui, |ui| {
-                    if pd.hunks.is_empty() {
+                    if pd.hunks.is_empty() && !pd.binary {
                         diff_lines(ui, &r.file_diff);
                     }
                     for (hi, h) in pd.hunks.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("Abschnitt {}", hi + 1)).color(theme::TEXT_DIM).size(12.0));
-                            if !untracked {
+                            ui.label(RichText::new(hunk_label(&pd, hi)).color(theme::TEXT_DIM).size(12.0));
+                            if !untracked && !pd.binary {
                                 let patch = format!("{}{}", pd.header, h);
                                 if staged_sel {
                                     if ui.small_button("− Abschnitt zurücknehmen").on_hover_text("git apply --cached --reverse\nNimmt nur diesen Abschnitt aus der Vormerkung").clicked() {

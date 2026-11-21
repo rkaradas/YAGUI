@@ -304,13 +304,41 @@ pub fn find_toplevel(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-pub fn load_commits(dir: &Path, limit: usize, all: bool) -> Vec<Commit> {
+/// Reference namespaces that "all commits" leaves out.
+pub const HIDDEN_REF_PREFIXES: [&str; 3] = ["refs/bisect/", "refs/worktree/", "refs/rewritten/"];
+
+/// Which tips the history starts from: every reference when `all` is set (else HEAD);
+/// `reflog` adds the commits the reflogs mention.
+#[derive(Clone, Copy)]
+pub struct LogOptions {
+    pub all: bool,
+    pub hide_stashes: bool,
+    pub reflog: bool,
+}
+
+pub fn log_tip_args(o: LogOptions) -> Vec<String> {
+    let mut v = Vec::new();
+    if o.all {
+        for p in HIDDEN_REF_PREFIXES {
+            v.push(format!("--exclude={p}*"));
+        }
+        if o.hide_stashes {
+            v.push("--exclude=refs/stash".into());
+        }
+        v.push("--all".into());
+    }
+    if o.reflog {
+        v.push("--reflog".into());
+    }
+    v
+}
+
+pub fn load_commits(dir: &Path, limit: usize, opts: LogOptions) -> Vec<Commit> {
     let fmt = "--format=%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1f%s%x1e";
     let n = format!("-n{limit}");
+    let tips = log_tip_args(opts);
     let mut args = vec!["log", "--date-order", fmt, "--date=format:%d.%m.%Y %H:%M", n.as_str()];
-    if all {
-        args.push("--all");
-    }
+    args.extend(tips.iter().map(|s| s.as_str()));
     let o = run(dir, &args);
     let mut out = Vec::new();
     for rec in o.stdout.split('\x1e') {
@@ -472,11 +500,100 @@ pub fn repo_state(dir: &Path) -> Option<&'static str> {
         Some("cherry-pick")
     } else if g.join("REVERT_HEAD").exists() {
         Some("revert")
-    } else if g.join("BISECT_LOG").exists() {
+    } else if g.join("BISECT_START").exists() {
+        // BISECT_START (not BISECT_LOG) marks the bisect state: it is the bisect file in WATCHED.
         Some("bisect")
+    } else if g.join("SQUASH_MSG").exists() {
+        // SQUASH_MSG belongs to the same "repository state" group (RELOAD_STATE):
+        // a `merge --squash` prepared changes and a message that still need a commit.
+        Some("squash")
     } else {
         None
     }
+}
+
+/// The lock file while another git process holds a lock (HEAD.lock / index.lock).
+pub fn repo_locked(dir: &Path) -> Option<&'static str> {
+    let g = git_dir(dir)?;
+    ["index.lock", "HEAD.lock"].into_iter().find(|f| g.join(f).exists())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Watching the .git folder
+
+pub const RELOAD_CONFIG: u32 = 0x01; // config, config.lock
+pub const RELOAD_HEAD: u32 = 0x02; // HEAD, HEAD.lock
+pub const RELOAD_REFS: u32 = 0x04; // packed-refs, packed-refs.lock (and refs/)
+pub const RELOAD_REFTABLE: u32 = 0x08; // reftable/
+pub const RELOAD_STATE: u32 = 0x10; // MERGE_HEAD, CHERRY_PICK_HEAD(.lock), REVERT_HEAD(.lock), SQUASH_MSG, BISECT_START, rebase-*
+pub const RELOAD_INDEX: u32 = 0x20; // index, index.lock
+pub const RELOAD_IGNORE: u32 = 0x40; // info/exclude(.lock): ignore rules changed -> status
+
+/// Every watched file with its reload flag.
+pub const WATCHED: &[(&str, u32)] = &[
+    ("config", RELOAD_CONFIG),
+    ("config.lock", RELOAD_CONFIG),
+    ("HEAD", RELOAD_HEAD),
+    ("HEAD.lock", RELOAD_HEAD),
+    ("packed-refs", RELOAD_REFS),
+    ("packed-refs.lock", RELOAD_REFS),
+    ("reftable", RELOAD_REFTABLE),
+    ("MERGE_HEAD", RELOAD_STATE),
+    ("CHERRY_PICK_HEAD", RELOAD_STATE),
+    ("CHERRY_PICK_HEAD.lock", RELOAD_STATE),
+    ("REVERT_HEAD", RELOAD_STATE),
+    ("REVERT_HEAD.lock", RELOAD_STATE),
+    ("SQUASH_MSG", RELOAD_STATE),
+    ("BISECT_START", RELOAD_STATE),
+    ("rebase-apply", RELOAD_STATE),
+    ("rebase-merge", RELOAD_STATE),
+    ("index", RELOAD_INDEX),
+    ("index.lock", RELOAD_INDEX),
+    ("info/exclude", RELOAD_IGNORE),
+    ("info/exclude.lock", RELOAD_IGNORE),
+];
+
+/// A fingerprint (exists, size, modified time) of each watched file.
+pub type Snapshot = Vec<(u32, Option<(u64, std::time::SystemTime)>)>;
+
+pub fn snapshot(git_dir: &Path) -> Snapshot {
+    let mut v: Snapshot = WATCHED
+        .iter()
+        .map(|(f, flag)| {
+            let m = std::fs::metadata(git_dir.join(f)).ok();
+            (*flag, m.and_then(|m| m.modified().ok().map(|t| (m.len(), t))))
+        })
+        .collect();
+    // Loose branch/tag files under refs/: newest change counts as a refs change.
+    v.push((RELOAD_REFS, newest_in(&git_dir.join("refs"), 4)));
+    v
+}
+
+fn newest_in(dir: &Path, depth: u32) -> Option<(u64, std::time::SystemTime)> {
+    let mut best: Option<(u64, std::time::SystemTime)> = None;
+    let mut count = 0u64;
+    let Ok(rd) = std::fs::read_dir(dir) else { return None };
+    for e in rd.flatten() {
+        let Ok(m) = e.metadata() else { continue };
+        count += 1;
+        let cand = if m.is_dir() {
+            if depth == 0 { None } else { newest_in(&e.path(), depth - 1) }
+        } else {
+            m.modified().ok().map(|t| (m.len(), t))
+        };
+        if let Some(c) = cand {
+            count += c.0;
+            if best.map(|b| c.1 > b.1).unwrap_or(true) {
+                best = Some(c);
+            }
+        }
+    }
+    best.map(|(_, t)| (count, t))
+}
+
+/// Which parts changed between two snapshots, as reload flags.
+pub fn changed_flags(old: &Snapshot, new: &Snapshot) -> u32 {
+    old.iter().zip(new.iter()).filter(|(a, b)| a.1 != b.1).fold(0, |acc, (a, _)| acc | a.0)
 }
 
 pub struct CommitDetail {
@@ -543,21 +660,77 @@ pub fn working_diff(dir: &Path, f: &FileStatus, staged: bool) -> String {
 pub struct ParsedDiff {
     pub header: String,
     pub hunks: Vec<String>,
+    /// Plain-language facts from the header lines, in the order git writes them.
+    pub facts: Vec<String>,
+    /// For each hunk: (old start, new start, context text after the second @@).
+    pub hunk_info: Vec<(u32, u32, String)>,
+    pub binary: bool,
 }
 
+/// Splits a diff into its parts: header lines (diff type, old/new mode, new/deleted file
+/// mode, similarity index, rename-from/-to, copy-from/-to, index sha, binary files differ),
+/// hunk headers (old start, new start, context) and context/added/deleted lines.
 pub fn parse_diff(text: &str) -> ParsedDiff {
     let mut header = String::new();
     let mut hunks: Vec<String> = Vec::new();
+    let mut facts = Vec::new();
+    let mut hunk_info = Vec::new();
+    let mut binary = false;
     for line in text.split_inclusive('\n') {
         if line.starts_with("@@") {
+            hunk_info.push(parse_hunk_header(line));
             hunks.push(line.to_string());
         } else if let Some(h) = hunks.last_mut() {
             h.push_str(line);
         } else {
             header.push_str(line);
+            let l = line.trim_end();
+            let fact = if let Some(m) = l.strip_prefix("new file mode ") {
+                Some(format!("Neue Datei (Modus {m})"))
+            } else if let Some(m) = l.strip_prefix("deleted file mode ") {
+                Some(format!("Datei gelöscht (Modus {m})"))
+            } else if let Some(m) = l.strip_prefix("old mode ") {
+                Some(format!("Dateimodus vorher {m}"))
+            } else if let Some(m) = l.strip_prefix("new mode ") {
+                Some(format!("Dateimodus jetzt {m}"))
+            } else if let Some(s) = l.strip_prefix("similarity index ") {
+                Some(format!("Ähnlichkeit {s}"))
+            } else if let Some(p) = l.strip_prefix("rename from ") {
+                Some(format!("Umbenannt von {p}"))
+            } else if let Some(p) = l.strip_prefix("rename to ") {
+                Some(format!("Umbenannt nach {p}"))
+            } else if let Some(p) = l.strip_prefix("copy from ") {
+                Some(format!("Kopiert von {p}"))
+            } else if let Some(p) = l.strip_prefix("copy to ") {
+                Some(format!("Kopiert nach {p}"))
+            } else if l.starts_with("Binary files ") || l == "GIT binary patch" {
+                binary = true;
+                Some("Binärdatei – Inhalt kann nicht zeilenweise gezeigt werden".to_string())
+            } else {
+                None
+            };
+            if let Some(f) = fact {
+                facts.push(f);
+            }
         }
     }
-    ParsedDiff { header, hunks }
+    ParsedDiff { header, hunks, facts, hunk_info, binary }
+}
+
+fn parse_hunk_header(line: &str) -> (u32, u32, String) {
+    // "@@ -12,5 +12,7 @@ fn context"
+    let mut old = 0;
+    let mut new = 0;
+    let mut parts = line.trim_end().splitn(4, ' ');
+    let _ = parts.next();
+    if let Some(o) = parts.next() {
+        old = o.trim_start_matches('-').split(',').next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    }
+    if let Some(n) = parts.next() {
+        new = n.trim_start_matches('+').split(',').next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    }
+    let ctx = line.splitn(3, "@@").nth(2).map(|s| s.trim().to_string()).unwrap_or_default();
+    (old, new, ctx)
 }
 
 pub fn file_log_entries(dir: &Path, path: &str) -> String {
