@@ -356,6 +356,7 @@ impl App {
                     menu_item(ui, acts, tr("Configure SSH Keys…", "SSH-Schlüssel einrichten…"), Act::Ssh);
                     menu_item(ui, acts, tr("Accounts…", "Konten…"), Act::Accounts);
                     ui.separator();
+                    menu_item(ui, acts, tr("Check for Updates…", "Nach Updates suchen…"), Act::CheckUpdates);
                     menu_item(ui, acts, tr("Preferences…   Ctrl+,", "Einstellungen…   Strg+,"), Act::Prefs);
                     ui.separator();
                     if ui.button(tr("Exit", "Beenden")).clicked() {
@@ -500,6 +501,14 @@ impl App {
                     }
                     ui.separator();
                     menu_cmd(ui, &self.cmds, acts, "version", Some(tr("Git Version…", "Git-Version…")), vec![]);
+                    ui.separator();
+                    menu_item(ui, acts, tr("Check for Updates…", "Nach Updates suchen…"), Act::CheckUpdates);
+                    if crate::installer::running_installed() {
+                        menu_item(ui, acts, tr("Uninstall YAGUI…", "YAGUI deinstallieren…"), Act::Uninstall);
+                    } else if !cfg!(target_os = "macos") {
+                        menu_item(ui, acts, tr("Install YAGUI…", "YAGUI installieren…"), Act::Install);
+                    }
+                    ui.separator();
                     menu_item(ui, acts, tr("About YAGUI", "Über YAGUI"), Act::About);
                 });
             });
@@ -749,6 +758,13 @@ impl App {
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if let Some(r) = &self.upd.notice {
+                        let t = trs(format!("Update {} available", r.tag), format!("Update {} verfügbar", r.tag));
+                        if ui.add(egui::Button::new(RichText::new(t).size(11.5).color(Color32::WHITE)).fill(theme::ACCENT_DARK())).clicked() {
+                            acts.push(Act::CheckUpdates);
+                        }
+                        ui.add_space(8.0);
+                    }
                     for (l, name) in [(Lang::De, "DE"), (Lang::En, "EN")] {
                         let sel = self.lang == l;
                         let r = ui.add(egui::Button::new(RichText::new(name).size(11.0).color(if sel { theme::TEXT_STRONG() } else { theme::TEXT_FAINT() })).frame(false));
@@ -939,7 +955,7 @@ impl App {
                     let pins: Vec<String> = names.iter().filter(|n| pinned.contains(n)).cloned().collect();
                     let rest: Vec<String> = names.iter().filter(|n| !pinned.contains(n)).cloned().collect();
                     let ctx = ui.ctx().clone();
-                    let mut draw_branch = |ui: &mut egui::Ui, name: &str, label: &str, indent: f32, acts: &mut Vec<Act>| {
+                    let draw_branch = |ui: &mut egui::Ui, name: &str, label: &str, indent: f32, acts: &mut Vec<Act>| {
                         let Some(b) = r.local.iter().find(|b| b.name == name) else { return };
                         let (a, be, gone) = Repo::ahead_behind(&b.track);
                         let mut right = String::new();

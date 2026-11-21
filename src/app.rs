@@ -7,6 +7,7 @@ mod extra;
 mod manager;
 mod tree;
 mod ui;
+pub mod updates;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -391,6 +392,9 @@ enum Act {
     RebaseAction(String, usize),
     /// A stash clicked in the sidebar: select it in the history and show its changes.
     SelectStash(String),
+    CheckUpdates,
+    Install,
+    Uninstall,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -508,6 +512,10 @@ pub struct App {
     branch_sort: u8,
     stash_rename: Option<(String, String)>,
     stale: Option<Vec<(String, bool, String)>>,
+    upd: updates::UpdateUi,
+    setup: Option<updates::SetupDialog>,
+    /// Don't write settings any more (after uninstalling).
+    no_save: bool,
 }
 
 /// How often the .git files are checked for changes.
@@ -602,7 +610,16 @@ impl App {
             branch_sort: saved.branch_sort,
             stash_rename: None,
             stale: None,
+            upd: updates::UpdateUi::default(),
+            setup: None,
+            no_save: false,
         };
+        crate::updater::cleanup();
+        match updates::START_MODE.get() {
+            Some(updates::StartMode::Install) => app.setup = Some(updates::SetupDialog::install()),
+            Some(updates::StartMode::Uninstall) => app.setup = Some(updates::SetupDialog::uninstall()),
+            _ => {}
+        }
         theme::set_light(app.p.light);
         theme::apply_visuals(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(app.p.zoom.clamp(0.6, 2.0));
@@ -669,6 +686,8 @@ impl App {
             Ok("branch") => app.open_branch_dialog(None, false),
             Ok("shortcuts") => app.show_shortcuts = true,
             Ok("about") => app.show_about = true,
+            Ok("updates") => app.upd.open = true,
+            Ok("setup") => app.setup = Some(updates::SetupDialog::install()),
             Ok("tablist") => app.show_tablist = true,
             Ok("light") => {
                 theme::set_light(true);
@@ -692,7 +711,7 @@ impl App {
     }
 
     fn save(&self) {
-        if self.screenshot.is_some() {
+        if self.screenshot.is_some() || self.no_save {
             return;
         }
         let s = Saved {
@@ -1187,6 +1206,9 @@ impl eframe::App for App {
         self.auth_dialogs(&ctx);
         self.manager_dialogs(&ctx);
         self.extra_dialogs(&ctx);
+        self.update_window(&ctx);
+        self.setup_window(&ctx);
+        self.auto_update_check(&ctx);
         self.apply(acts, &ctx);
     }
 }
@@ -1415,6 +1437,12 @@ impl App {
                     self.mgr.rename = Some((p, n));
                 }
                 Act::StaleBranches => self.open_stale(),
+                Act::CheckUpdates => {
+                    self.upd.open = true;
+                    self.check_updates(false, ctx);
+                }
+                Act::Install => self.setup = Some(updates::SetupDialog::install()),
+                Act::Uninstall => self.setup = Some(updates::SetupDialog::uninstall()),
                 Act::SelectStash(name) => {
                     if let Some(t) = self.tabs.get_mut(self.active) {
                         t.view = View::Commits;

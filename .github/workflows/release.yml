@@ -1,0 +1,150 @@
+# Builds YAGUI for Windows, Linux and macOS and publishes a GitHub release.
+#
+# Runs when a version tag is pushed (e.g. `git tag v1.0.0 && git push origin v1.0.0`) or by hand
+# (Actions > Release > Run workflow; then it only builds and keeps the files as artifacts).
+#
+# Release files (the in-app updater looks for these names):
+#   YAGUI-Setup-<v>-windows-x64.exe   installer (the program installs itself; uninstall via Settings > Apps)
+#   yagui-<v>-windows-x64.exe         portable program / update file
+#   yagui_<v>_amd64.deb               Debian/Ubuntu package
+#   yagui-<v>-linux-x64.tar.gz        program for any Linux (run `./yagui --install`)
+#   YAGUI-<v>-macos-universal.dmg     app for Apple silicon and Intel Macs
+#   yagui-<v>-macos-universal.tar.gz  update file for macOS
+#   SHA256SUMS.txt                    checksums
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: ubuntu-22.04
+          - os: macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev
+
+      - name: Version
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF#refs/tags/v}" != "$VERSION" ]]; then
+            echo "::error::Tag ${GITHUB_REF#refs/tags/} does not match Cargo.toml version $VERSION"; exit 1
+          fi
+
+      - name: Test
+        if: runner.os != 'macOS'
+        run: cargo test --release --locked
+
+      - name: Build
+        if: runner.os != 'macOS'
+        run: cargo build --release --locked
+
+      - name: Build (universal macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/yagui target/aarch64-apple-darwin/release/yagui target/x86_64-apple-darwin/release/yagui
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/yagui.exe "dist/yagui-$VERSION-windows-x64.exe"
+          cp target/release/yagui.exe "dist/YAGUI-Setup-$VERSION-windows-x64.exe"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist "pkg/yagui-$VERSION-linux-x64"
+          ./target/release/yagui --write-icon packaging/linux/yagui.png 256
+          cp target/release/yagui README.md CHANGELOG.md packaging/linux/yagui.desktop packaging/linux/yagui.png "pkg/yagui-$VERSION-linux-x64/"
+          tar -czf "dist/yagui-$VERSION-linux-x64.tar.gz" -C pkg "yagui-$VERSION-linux-x64"
+          cargo install cargo-deb --locked
+          cargo deb --no-build --output "dist/yagui_${VERSION}_amd64.deb"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist YAGUI.app/Contents/MacOS YAGUI.app/Contents/Resources yagui.iconset
+          cp target/release/yagui YAGUI.app/Contents/MacOS/yagui
+          sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > YAGUI.app/Contents/Info.plist
+          for s in 16 32 128 256 512; do
+            ./target/release/yagui --write-icon "yagui.iconset/icon_${s}x${s}.png" $s
+            ./target/release/yagui --write-icon "yagui.iconset/icon_${s}x${s}@2x.png" $((s*2))
+          done
+          iconutil -c icns yagui.iconset -o YAGUI.app/Contents/Resources/yagui.icns
+          codesign --force --deep -s - YAGUI.app
+          mkdir dmg && cp -R YAGUI.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "YAGUI $VERSION" -srcfolder dmg -ov -format UDZO "dist/YAGUI-$VERSION-macos-universal.dmg"
+          tar -czf "dist/yagui-$VERSION-macos-universal.tar.gz" -C target/release yagui
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yagui-${{ runner.os }}
+          path: dist/*
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+
+      - name: Checksums and release notes
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          (cd files && sha256sum * > SHA256SUMS.txt)
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" {on=1; next}
+            on && /^## \[/ {exit}
+            on {print}
+          ' CHANGELOG.md > notes.md
+          {
+            echo
+            echo "### Download"
+            echo "- **Windows:** \`YAGUI-Setup-$VERSION-windows-x64.exe\` installs YAGUI (uninstall via Settings > Apps). \`yagui-$VERSION-windows-x64.exe\` runs without installing."
+            echo "- **macOS:** \`YAGUI-$VERSION-macos-universal.dmg\`, drag YAGUI into Applications. The app is not notarized: open it the first time with right-click > Open."
+            echo "- **Linux:** \`yagui_${VERSION}_amd64.deb\` (Debian/Ubuntu) or \`yagui-$VERSION-linux-x64.tar.gz\` (run \`./yagui --install\`)."
+            echo
+            echo "Git must be installed. YAGUI checks for updates once a day (Help > Check for Updates)."
+          } >> notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: YAGUI ${{ github.ref_name }}
+          body_path: notes.md
+          files: files/*

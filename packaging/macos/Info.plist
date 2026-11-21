@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>YAGUI</string>
+  <key>CFBundleDisplayName</key>
+  <string>YAGUI</string>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.rkaradas.yagui</string>
+  <key>CFBundleExecutable</key>
+  <string>yagui</string>
+  <key>CFBundleIconFile</key>
+  <string>yagui</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>CFBundleGetInfoString</key>
+  <string>YAGUI @VERSION@ - Yet Another Git User Interface</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>

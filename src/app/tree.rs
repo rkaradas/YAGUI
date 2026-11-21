@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use eframe::egui::{self, Align2, Color32, FontId, Id, Sense, Vec2};
+use eframe::egui::{self, Align2, FontId, Id, Sense, Vec2};
 
 use crate::icons::{self, Icon};
 use crate::theme;

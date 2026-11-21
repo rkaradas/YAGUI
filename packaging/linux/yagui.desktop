@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=YAGUI
+GenericName=Git client
+Comment=Yet Another Git User Interface
+Exec=yagui %f
+Icon=yagui
+Terminal=false
+Categories=Development;RevisionControl;
+StartupWMClass=YAGUI.GitClient

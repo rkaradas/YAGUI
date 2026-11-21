@@ -101,6 +101,11 @@ pub struct Prefs {
     pub verbose: bool,
     #[serde(default = "yes")]
     pub issue_links: bool,
+    /// Preferences > Updates: check GitHub for a new version once a day.
+    #[serde(default = "yes")]
+    pub auto_update: bool,
+    #[serde(default)]
+    pub last_update_check: u64,
 }
 
 fn one() -> f32 {
@@ -911,6 +916,7 @@ impl App {
             return;
         }
         let mut open = true;
+        let mut open_updates = false;
         let git = crate::git::run(std::path::Path::new("."), &["--version"]).stdout;
         egui::Window::new(tr("About YAGUI", "Über YAGUI")).id(Id::unique("about")).open(&mut open).collapsible(false).resizable(false).pivot(Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
             ui.vertical_centered(|ui| {
@@ -918,16 +924,25 @@ impl App {
                 ui.image((tex.id(), Vec2::splat(72.0)));
                 ui.label(RichText::new("YAGUI").font(FontId::new(22.0, theme::semibold())));
                 ui.label(RichText::new("Yet Another Git User Interface").size(13.0).color(theme::TEXT_DIM()));
-                ui.label(RichText::new(format!("{} {}", tr("Version", "Version"), env!("CARGO_PKG_VERSION"))).color(theme::TEXT_DIM()));
+                ui.label(RichText::new(format!("{} {}", tr("Version", "Version"), crate::version::VERSION)).color(theme::TEXT_DIM()));
+                ui.label(RichText::new(format!("{} {} · {} · {}", tr("Commit", "Commit"), crate::version::COMMIT, crate::version::COMMIT_DATE, crate::version::platform())).size(11.5).color(theme::TEXT_FAINT()));
                 ui.label(RichText::new(tr("A friendly Git client that shows every command it runs.", "Ein freundlicher Git-Client, der jeden ausgeführten Befehl zeigt.")).size(12.5));
                 ui.label(RichText::new(git.trim()).size(11.5).color(theme::TEXT_FAINT()));
                 ui.add_space(6.0);
                 if ui.link(RichText::new(REPO_URL).size(12.0)).on_hover_text(tr("Source code on GitHub", "Quellcode auf GitHub")).clicked() {
                     super::auth::open_url(REPO_URL);
                 }
+                ui.add_space(4.0);
+                if ui.button(tr("Check for Updates…", "Nach Updates suchen…")).clicked() {
+                    open_updates = true;
+                }
             });
         });
         self.show_about = open;
+        if open_updates {
+            self.upd.open = true;
+            self.check_updates(false, ctx);
+        }
     }
 }
 
