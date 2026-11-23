@@ -250,9 +250,14 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           # The tag must still point to what this run built (it may have been moved meanwhile).
-          # GITHUB_SHA is the tagged commit; the tag object of an annotated tag is accepted too.
-          tag_commit=$(gh api "repos/$GH_REPO/commits/tags/$GITHUB_REF_NAME" --jq .sha)
-          tag_object=$(gh api "repos/$GH_REPO/git/ref/tags/$GITHUB_REF_NAME" --jq .object.sha)
+          # An annotated tag points to a tag object, which points to the commit ("commits/tags/<tag>"
+          # answers 422 for those). GITHUB_SHA is the tagged commit; the tag object is accepted too.
+          ref=$(gh api "repos/$GH_REPO/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')
+          tag_object=${ref#* }
+          tag_commit=$tag_object
+          if [ "${ref%% *}" = tag ]; then
+            tag_commit=$(gh api "repos/$GH_REPO/git/tags/$tag_object" --jq .object.sha)
+          fi
           if [ "$GITHUB_SHA" != "$tag_commit" ] && [ "$GITHUB_SHA" != "$tag_object" ]; then
             echo "::error::Tag $GITHUB_REF_NAME now points to $tag_commit, this run built $GITHUB_SHA. Nothing published; use the run for the new commit."
             exit 1
