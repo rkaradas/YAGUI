@@ -5,6 +5,8 @@ MAJOR.MINOR.PATCH. The release workflow takes the notes for a version from this 
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-24
+
 ### Added
 - Side-by-side diff: old lines on the left, new lines on the right, gaps hatched
 - Diff toolbar at the top right of every diff (left to right): ignore whitespace, show invisible characters (· space, → tab, ¶ Windows line end), word wrap (in the single-column view), fewer and more lines around each change, the entire file, side by side. The choices are remembered
