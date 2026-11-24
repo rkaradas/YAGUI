@@ -63,6 +63,17 @@ pub fn DIFF_ADD() -> Color32 { if is_light() { Color32::from_rgb(0xdd, 0xf4, 0xe
 pub fn DIFF_DEL() -> Color32 { if is_light() { Color32::from_rgb(0xfb, 0xe2, 0xe2) } else { Color32::from_rgb(0x42, 0x24, 0x26) } }
 #[allow(non_snake_case)]
 pub fn DIFF_HUNK() -> Color32 { if is_light() { Color32::from_rgb(0xe6, 0xee, 0xfa) } else { Color32::from_rgb(0x2a, 0x30, 0x3a) } }
+#[allow(non_snake_case)]
+pub fn DIFF_ADD_FG() -> Color32 { if is_light() { Color32::from_rgb(0x1d, 0x5e, 0x2a) } else { Color32::from_rgb(0xc4, 0xe8, 0xc9) } }
+#[allow(non_snake_case)]
+pub fn DIFF_DEL_FG() -> Color32 { if is_light() { Color32::from_rgb(0x8a, 0x1f, 0x1f) } else { Color32::from_rgb(0xf0, 0xc0, 0xc0) } }
+#[allow(non_snake_case)]
+pub fn DIFF_HUNK_FG() -> Color32 { if is_light() { Color32::from_rgb(0x3a, 0x5a, 0x86) } else { Color32::from_rgb(0x8f, 0xa9, 0xc7) } }
+/// The empty side of a side-by-side row (no line there) and its hatching.
+#[allow(non_snake_case)]
+pub fn DIFF_FILLER() -> Color32 { if is_light() { Color32::from_rgb(0xf1, 0xf1, 0xf1) } else { Color32::from_rgb(0x27, 0x27, 0x27) } }
+#[allow(non_snake_case)]
+pub fn DIFF_HATCH() -> Color32 { if is_light() { Color32::from_rgb(0xdc, 0xdc, 0xdc) } else { Color32::from_rgb(0x36, 0x36, 0x36) } }
 
 pub const LANES: [Color32; 8] = [
     Color32::from_rgb(0xf0, 0x8c, 0x1a),

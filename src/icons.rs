@@ -38,6 +38,20 @@ pub enum Icon {
     Eye,
     Filter,
     Chart,
+    /// Diff toolbar: ignore whitespace (a crossed-out space).
+    Whitespace,
+    /// Diff toolbar: show invisible characters (pilcrow).
+    Invisibles,
+    /// Diff toolbar: word wrap.
+    Wrap,
+    /// Diff toolbar: fewer lines of context (arrows towards a line).
+    ContextLess,
+    /// Diff toolbar: more lines of context (arrows away from a line).
+    ContextMore,
+    /// Diff toolbar: the entire file.
+    FullFile,
+    /// Diff toolbar: side by side (two columns).
+    SplitView,
 }
 
 fn line(p: &Painter, a: Pos2, b: Pos2, s: Stroke) {
@@ -245,6 +259,50 @@ pub fn draw(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Lock => {
             p.rect_stroke(Rect::from_min_max(at(3.0, 7.0), at(13.0, 14.5)), 1.5 * k, s, eframe::egui::StrokeKind::Middle);
             p.add(Shape::line(vec![at(5.5, 7.0), at(5.5, 4.5), at(8.0, 2.0), at(10.5, 4.5), at(10.5, 7.0)], s));
+        }
+        Icon::Whitespace => {
+            p.add(Shape::line(vec![at(2.5, 7.5), at(2.5, 11.5), at(13.5, 11.5), at(13.5, 7.5)], s));
+            line(p, at(3.0, 14.5), at(13.0, 2.5), s);
+        }
+        Icon::Invisibles => {
+            line(p, at(8.5, 2.5), at(8.5, 14.0), s);
+            line(p, at(11.5, 2.5), at(11.5, 14.0), s);
+            line(p, at(6.0, 2.5), at(13.5, 2.5), s);
+            p.add(Shape::convex_polygon((0..=12).map(|i| { let a = std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / 12.0; at(8.5 + 3.3 * a.cos(), 5.8 - 3.3 * a.sin()) }).collect(), color, Stroke::NONE));
+        }
+        Icon::Wrap => {
+            line(p, at(2.0, 3.5), at(14.0, 3.5), s);
+            p.add(Shape::line(vec![at(2.0, 8.0), at(12.0, 8.0), at(13.6, 9.6), at(13.6, 11.0), at(12.0, 12.6), at(7.5, 12.6)], s));
+            arrow_head(p, at(7.0, 12.6), vec2(-1.0, 0.0), 2.4 * k, s);
+            line(p, at(2.0, 12.6), at(4.0, 12.6), s);
+        }
+        Icon::ContextLess => {
+            line(p, at(2.0, 8.0), at(14.0, 8.0), s);
+            line(p, at(8.0, 1.5), at(8.0, 5.5), s);
+            arrow_head(p, at(8.0, 5.5), vec2(0.0, 1.0), 2.4 * k, s);
+            line(p, at(8.0, 14.5), at(8.0, 10.5), s);
+            arrow_head(p, at(8.0, 10.5), vec2(0.0, -1.0), 2.4 * k, s);
+        }
+        Icon::ContextMore => {
+            line(p, at(2.0, 8.0), at(14.0, 8.0), s);
+            line(p, at(8.0, 5.5), at(8.0, 1.5), s);
+            arrow_head(p, at(8.0, 1.5), vec2(0.0, -1.0), 2.4 * k, s);
+            line(p, at(8.0, 10.5), at(8.0, 14.5), s);
+            arrow_head(p, at(8.0, 14.5), vec2(0.0, 1.0), 2.4 * k, s);
+        }
+        Icon::FullFile => {
+            p.add(Shape::closed_line(vec![at(3.0, 1.5), at(10.0, 1.5), at(13.0, 4.5), at(13.0, 14.5), at(3.0, 14.5)], s));
+            for y in [5.5, 8.0, 10.5, 13.0] {
+                line(p, at(5.5, y), at(10.5, y), s);
+            }
+        }
+        Icon::SplitView => {
+            p.rect_stroke(Rect::from_min_max(at(1.5, 2.5), at(14.5, 13.5)), 1.5 * k, s, eframe::egui::StrokeKind::Middle);
+            line(p, at(8.0, 2.5), at(8.0, 13.5), s);
+            for y in [5.5, 8.0, 10.5] {
+                line(p, at(3.5, y), at(6.0, y), s);
+                line(p, at(10.0, y), at(12.5, y), s);
+            }
         }
     }
 }

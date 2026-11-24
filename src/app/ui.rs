@@ -6,11 +6,12 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Align, Align2, Color32, FontId, Id, Layout, RichText, Sense, Stroke, Vec2};
 
+use super::diffmodel::Diff;
 use super::tree::{self, Row};
-use super::{Act, App, DetailTab, Repo, View, ViewOpt};
+use super::{diffview, Act, App, DetailTab, Repo, View, ViewOpt};
 use crate::catalog::{self, CATS};
 use crate::git::{self, FileStatus, JobState};
-use crate::i18n::{self, Lang, c, tr, trs};
+use crate::i18n::{Lang, c, tr, trs};
 use crate::icons::{self, Icon};
 use crate::theme;
 
@@ -190,7 +191,7 @@ fn section_r(ui: &mut egui::Ui, id: &str, title: &str, count: usize, default_ope
     (open, resp)
 }
 
-fn pill(ui: &mut egui::Ui, text: &str, fill: Color32, fg: Color32) {
+pub(super) fn pill(ui: &mut egui::Ui, text: &str, fill: Color32, fg: Color32) {
     egui::Frame::new().fill(fill).corner_radius(9).inner_margin(egui::Margin::symmetric(7, 1)).show(ui, |ui| {
         ui.label(RichText::new(text).size(11.0).color(fg));
     });
@@ -216,23 +217,19 @@ fn menu_cmd(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, id: &
 }
 
 // ---------------------------------------------------------------------------------------------
-// Diff rendering with line numbers
+// Diffs (drawn by `diffview`)
 
-pub(super) fn diff_facts(ui: &mut egui::Ui, pd: &git::ParsedDiff) {
-    if pd.facts.is_empty() {
-        return;
-    }
-    ui.horizontal_wrapped(|ui| {
-        for f in &pd.facts {
-            let txt = if i18n::is_de() { f.clone() } else { fact_en(f) };
-            pill(ui, &txt, theme::dk(0x2c, 0x37, 0x46), Color32::from_rgb(0xb4, 0xcf, 0xee));
-        }
+/// Shown while a diff is being loaded in the background.
+fn loading_hint(ui: &mut egui::Ui) {
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        ui.label(RichText::new(tr("Loading…", "Lädt …")).color(theme::TEXT_FAINT()));
     });
-    ui.add_space(4.0);
 }
 
-/// The facts are produced in German by `git::parse_diff`; translate them for English.
-fn fact_en(f: &str) -> String {
+/// The facts are produced in German by `diffmodel::parse`; translate them for English.
+pub(super) fn fact_en(f: &str) -> String {
     let pairs = [
         ("Neue Datei (Modus ", "New file (mode "),
         ("Datei gelöscht (Modus ", "Deleted file (mode "),
@@ -253,73 +250,38 @@ fn fact_en(f: &str) -> String {
     f.to_string()
 }
 
-/// Draws diff lines with old/new line numbers (from the hunk headers).
-pub(super) fn diff_body(ui: &mut egui::Ui, text: &str) {
-    if text.trim().is_empty() {
-        ui.add_space(8.0);
-        ui.label(RichText::new(tr("No textual changes.", "Keine Textänderungen.")).color(theme::TEXT_DIM()));
+/// A file's diff with its header (status, name, diff toolbar), for the Changes tab of a commit.
+fn diff_panel(ui: &mut egui::Ui, acts: &mut Vec<Act>, bar: &diffview::Bar, code: char, path: &str, d: Option<&Diff>, id: Id) {
+    let split_possible = !d.is_some_and(|d| d.combined) && ui.available_width() >= diffview::SPLIT_MIN_WIDTH;
+    egui::Frame::new().fill(theme::PANEL()).inner_margin(egui::Margin::symmetric(12, 5)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            status_badge(ui, code);
+            let (file, dir) = split_path(path);
+            ui.label(RichText::new(file).font(FontId::new(13.0, theme::semibold())).color(theme::TEXT_STRONG()));
+            if !dir.is_empty() {
+                ui.label(RichText::new(dir).size(12.0).color(theme::TEXT_DIM()));
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if let Some(o) = diffview::toolbar(ui, bar, split_possible) {
+                    acts.push(Act::DiffOpt(o));
+                }
+            });
+        });
+    });
+    let Some(d) = d else {
+        loading_hint(ui);
+        return;
+    };
+    egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 10, top: 6, bottom: 0 }).show(ui, |ui| {
+        diffview::facts(ui, d);
+    });
+    if d.unified.is_empty() {
+        diffview::empty_hint(ui, d, &bar.opts);
         return;
     }
-    let font = FontId::monospace(super::extra::diff_font_size());
-    let tabs = " ".repeat(super::extra::tab_width());
-    let w = ui.available_width().max(700.0);
-    let num_w = 38.0;
-    let (mut old, mut new) = (0u32, 0u32);
-    let mut in_hunk = false;
-    for line in text.lines().take(8000) {
-        if line.starts_with("@@") {
-            let (o, n, _) = parse_hunk(line);
-            old = o;
-            new = n;
-            in_hunk = true;
-        }
-        if !in_hunk {
-            continue; // the file header is summarised by diff_facts
-        }
-        let (bg, fg, on, nn) = if line.starts_with("@@") {
-            (theme::DIFF_HUNK(), if theme::is_light() { Color32::from_rgb(0x3a, 0x5a, 0x86) } else { Color32::from_rgb(0x8f, 0xa9, 0xc7) }, None, None)
-        } else if line.starts_with('+') {
-            new += 1;
-            (theme::DIFF_ADD(), if theme::is_light() { Color32::from_rgb(0x1d, 0x5e, 0x2a) } else { Color32::from_rgb(0xc4, 0xe8, 0xc9) }, None, Some(new - 1))
-        } else if line.starts_with('-') {
-            old += 1;
-            (theme::DIFF_DEL(), if theme::is_light() { Color32::from_rgb(0x8a, 0x1f, 0x1f) } else { Color32::from_rgb(0xf0, 0xc0, 0xc0) }, Some(old - 1), None)
-        } else if line.starts_with('\\') {
-            (Color32::TRANSPARENT, theme::TEXT_FAINT(), None, None)
-        } else {
-            old += 1;
-            new += 1;
-            (Color32::TRANSPARENT, theme::TEXT(), Some(old - 1), Some(new - 1))
-        };
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(w, (font.size + 5.5).max(16.0)), Sense::hover());
-        let p = ui.painter();
-        if bg != Color32::TRANSPARENT {
-            p.rect_filled(rect, 0, bg);
-        }
-        let numcol = theme::TEXT_FAINT();
-        if let Some(o) = on {
-            p.text(egui::pos2(rect.left() + num_w - 4.0, rect.center().y), Align2::RIGHT_CENTER, o.to_string(), FontId::monospace(11.0), numcol);
-        }
-        if let Some(n) = nn {
-            p.text(egui::pos2(rect.left() + 2.0 * num_w - 4.0, rect.center().y), Align2::RIGHT_CENTER, n.to_string(), FontId::monospace(11.0), numcol);
-        }
-        p.line_segment([egui::pos2(rect.left() + 2.0 * num_w + 2.0, rect.top()), egui::pos2(rect.left() + 2.0 * num_w + 2.0, rect.bottom())], Stroke::new(1.0, theme::LINE()));
-        p.text(egui::pos2(rect.left() + 2.0 * num_w + 10.0, rect.center().y), Align2::LEFT_CENTER, line.replace('\t', &tabs), font.clone(), fg);
-    }
-}
-
-fn parse_hunk(line: &str) -> (u32, u32, String) {
-    let pd = git::parse_diff(line);
-    pd.hunk_info.into_iter().next().unwrap_or((0, 0, String::new()))
-}
-
-pub(super) fn diff_view(ui: &mut egui::Ui, text: &str, id: &str) {
-    let pd = git::parse_diff(text);
-    diff_facts(ui, &pd);
-    egui::ScrollArea::both().id_salt(id).auto_shrink([false; 2]).show(ui, |ui| {
-        if !pd.binary {
-            diff_body(ui, text);
-        }
+    egui::ScrollArea::vertical().id_salt(id).auto_shrink([false; 2]).show(ui, |ui| {
+        diffview::draw(ui, id, d, bar.look, None);
     });
 }
 
@@ -777,6 +739,17 @@ impl App {
                     if ui.add(egui::Button::new(RichText::new(label).size(11.5).color(theme::TEXT_DIM())).frame(false)).clicked() {
                         acts.push(Act::ToggleActivity);
                     }
+                    // The repository is being read in the background; said only when it takes a
+                    // while, so quick reloads don't make the bar flicker.
+                    if let Some(d) = self.tabs.get(self.active).and_then(|r| r.loading_for()) {
+                        let wait = std::time::Duration::from_millis(400);
+                        if d >= wait {
+                            ui.add_space(8.0);
+                            ui.label(RichText::new(tr("Reading repository…", "Lese Repository …")).size(11.5).color(theme::TEXT_FAINT()));
+                        } else {
+                            ui.ctx().request_repaint_after(wait - d);
+                        }
+                    }
                 });
             });
         });
@@ -946,17 +919,26 @@ impl App {
                     }
                 });
                 if open_b {
+                    // Runs every frame: keep it linear in the number of branches (lookups by
+                    // map, sort keys computed once), whatever the repository's size.
                     let mut names: Vec<String> = r.local.iter().map(|b| b.name.clone()).filter(|n| matches(n)).collect();
                     match sort {
-                        1 => names.sort_by(|a, b| b.to_lowercase().cmp(&a.to_lowercase())),
-                        2 => names.sort_by_key(|n| r.branch_recency.iter().position(|x| x == n).unwrap_or(usize::MAX)),
-                        _ => names.sort_by_key(|n| n.to_lowercase()),
+                        1 => {
+                            names.sort_by_cached_key(|n| n.to_lowercase());
+                            names.reverse();
+                        }
+                        2 => {
+                            let recency: std::collections::HashMap<&str, usize> = r.branch_recency.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+                            names.sort_by_key(|n| recency.get(n.as_str()).copied().unwrap_or(usize::MAX));
+                        }
+                        _ => names.sort_by_cached_key(|n| n.to_lowercase()),
                     }
                     let pins: Vec<String> = names.iter().filter(|n| pinned.contains(n)).cloned().collect();
                     let rest: Vec<String> = names.iter().filter(|n| !pinned.contains(n)).cloned().collect();
+                    let by_name: std::collections::HashMap<&str, &git::RefInfo> = r.local.iter().map(|b| (b.name.as_str(), b)).collect();
                     let ctx = ui.ctx().clone();
                     let draw_branch = |ui: &mut egui::Ui, name: &str, label: &str, indent: f32, acts: &mut Vec<Act>| {
-                        let Some(b) = r.local.iter().find(|b| b.name == name) else { return };
+                        let Some(b) = by_name.get(name).copied() else { return };
                         let (a, be, gone) = Repo::ahead_behind(&b.track);
                         let mut right = String::new();
                         if a > 0 {
@@ -995,29 +977,32 @@ impl App {
                                 }
                             }
                         }
-                        let resp = resp.on_hover_text(trs(
-                            format!("{}{}\nDouble-click to switch · right-click for actions", b.name, if b.upstream.is_empty() { String::new() } else { format!(" → {}", b.upstream) }),
-                            format!("{}{}\nDoppelklick zum Wechseln · Rechtsklick für Aktionen", b.name, if b.upstream.is_empty() { String::new() } else { format!(" → {}", b.upstream) }),
-                        ));
+                        // Tooltip and menu data are built only when shown, not in every frame.
+                        let resp = resp.on_hover_ui(|ui| {
+                            let up = if b.upstream.is_empty() { String::new() } else { format!(" → {}", b.upstream) };
+                            ui.label(trs(
+                                format!("{}{up}\nDouble-click to switch · right-click for actions", b.name),
+                                format!("{}{up}\nDoppelklick zum Wechseln · Rechtsklick für Aktionen", b.name),
+                            ));
+                        });
                         if hit_button {
                         } else if resp.double_clicked() && !b.is_head {
                             acts.push(Act::Open("switch", vec![("branch", b.name.clone())]));
                         } else if resp.clicked() {
-                            acts.push(Act::JumpToRef(b.name.clone()));
+                            acts.push(Act::JumpToRef(format!("refs/heads/{}", b.name)));
                         }
-                        let name = b.name.clone();
-                        let up = b.upstream.clone();
-                        let head = head.clone();
                         let cmds = &self.cmds;
-                        let extra = BranchExtra {
-                            pr: r.remotes.first().and_then(|(rn, url)| super::manager::web_url(url).map(|w| (rn.clone(), pr_url(&w, &name)))),
-                            remote_branches: r.remote_branches.iter().map(|b| b.name.clone()).collect(),
-                            customs: branch_customs.clone(),
-                            pinned: is_pinned,
-                            filtered,
-                            hidden,
-                        };
-                        resp.context_menu(|ui| branch_menu(ui, cmds, acts, &name, &up, &head, false, &extra));
+                        resp.context_menu(|ui| {
+                            let extra = BranchExtra {
+                                pr: r.remotes.first().and_then(|(rn, url)| super::manager::web_url(url).map(|w| (rn.clone(), pr_url(&w, &b.name)))),
+                                remote_branches: r.remote_branches.iter().map(|b| b.name.clone()).collect(),
+                                customs: branch_customs.clone(),
+                                pinned: is_pinned,
+                                filtered,
+                                hidden,
+                            };
+                            branch_menu(ui, cmds, acts, &b.name, &b.upstream, &head, false, &extra)
+                        });
                     };
                     for n in &pins {
                         draw_branch(ui, n, n, 8.0, acts);
@@ -1103,20 +1088,21 @@ impl App {
                                 if resp.double_clicked() {
                                     acts.push(Act::Open("checkout_track", vec![("branch", b.name.clone())]));
                                 } else if resp.clicked() {
-                                    acts.push(Act::JumpToRef(b.name.clone()));
+                                    acts.push(Act::JumpToRef(format!("refs/remotes/{}", b.name)));
                                 }
-                                let name = b.name.clone();
-                                let head = head.clone();
+                                let name = &b.name;
                                 let cmds = &self.cmds;
-                                let extra = BranchExtra {
-                                    pr: r.remotes.iter().find(|(rn, _)| name.starts_with(&format!("{rn}/"))).and_then(|(rn, url)| super::manager::web_url(url).map(|w| (rn.clone(), pr_url(&w, name.split_once('/').map(|x| x.1).unwrap_or(&name))))),
-                                    remote_branches: vec![],
-                                    customs: branch_customs.clone(),
-                                    pinned: false,
-                                    filtered: r.log_opts.only.as_deref() == Some(name.as_str()),
-                                    hidden: false,
-                                };
-                                resp.context_menu(|ui| branch_menu(ui, cmds, acts, &name, "", &head, true, &extra));
+                                resp.context_menu(|ui| {
+                                    let extra = BranchExtra {
+                                        pr: r.remotes.iter().find(|(rn, _)| name.starts_with(&format!("{rn}/"))).and_then(|(rn, url)| super::manager::web_url(url).map(|w| (rn.clone(), pr_url(&w, name.split_once('/').map(|x| x.1).unwrap_or(name))))),
+                                        remote_branches: vec![],
+                                        customs: branch_customs.clone(),
+                                        pinned: false,
+                                        filtered: r.log_opts.only.as_deref() == Some(name.as_str()),
+                                        hidden: false,
+                                    };
+                                    branch_menu(ui, cmds, acts, name, "", &head, true, &extra)
+                                });
                                 }
                             }
                         }
@@ -1132,7 +1118,7 @@ impl App {
                     for t in r.tags.iter().rev().filter(|t| matches(&t.name)) {
                         let resp = list_row(ui, Some(Icon::Tag), &t.name, false, "", false, 8.0);
                         if resp.clicked() {
-                            acts.push(Act::JumpToRef(t.name.clone()));
+                            acts.push(Act::JumpToRef(format!("refs/tags/{}", t.name)));
                         }
                         let name = t.name.clone();
                         let cmds = &self.cmds;
@@ -1226,17 +1212,18 @@ impl App {
         let commit_customs = self.customs_for(1);
         let compact_labels = self.p.compact_labels;
         let rules = if self.p.issue_links { self.repo_settings().issue_rules } else { vec![] };
+        let bar = self.diff_bar();
         let cmds = &self.cmds;
         let r = &mut self.tabs[self.active];
         if !hide_details {
             let frame = egui::Frame::new().fill(theme::PANEL()).inner_margin(0);
             if vertical {
                 egui::Panel::right("detail_v").resizable(true).default_size(560.0).min_size(260.0).frame(frame).show(ui, |ui| {
-                    detail_pane(ui, r, acts, &rules);
+                    detail_pane(ui, r, acts, &rules, &bar);
                 });
             } else {
                 egui::Panel::bottom("detail").resizable(true).default_size(340.0).min_size(140.0).frame(frame).show(ui, |ui| {
-                    detail_pane(ui, r, acts, &rules);
+                    detail_pane(ui, r, acts, &rules, &bar);
                 });
             }
         }
@@ -1283,26 +1270,39 @@ impl App {
                     _ => tr("Search message, author or SHA", "Beschreibung, Autor oder SHA suchen"),
                 };
                 let te = ui.add(egui::TextEdit::singleline(&mut r.commit_search).hint_text(hint).desired_width(280.0).frame(egui::Frame::NONE));
-                // Path and diff-content searches ask git (git log -- <path> / git log -G <text>).
-                if r.search_mode > 0 && (mode_before != r.search_mode || (te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || (r.search_mode == 1 && te.changed())) {
-                    let q = r.commit_search.trim().to_string();
-                    if q.is_empty() {
-                        r.search_hits = None;
-                    } else {
-                        let mut args: Vec<String> = vec!["log".into(), "--format=%H".into(), "-n3000".into()];
-                        args.extend(git::log_tip_args(&r.log_opts));
-                        if r.search_mode == 1 {
-                            args.push("--".into());
-                            args.push(format!("*{q}*"));
-                        } else {
-                            args.insert(1, format!("-G{}", regex_escape(&q)));
-                        }
-                        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-                        let out = git::run(&r.path, &refs).stdout;
-                        r.search_hits = Some(out.lines().map(|l| l.trim().to_string()).collect());
-                    }
-                } else if r.search_mode == 0 {
+                // Path and diff-content searches ask git (git log -- <path> / git log -G <text>),
+                // in the background; while typing a path only after a short pause.
+                let now = ui.input(|i| i.time);
+                if r.search_mode > 0 && (mode_before != r.search_mode || (te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))) {
+                    r.search_due = Some(now);
+                } else if r.search_mode == 1 && te.changed() {
+                    r.search_due = Some(now + 0.35);
+                }
+                if r.search_mode == 0 {
                     r.search_hits = None;
+                    r.search_due = None;
+                }
+                if let Some(due) = r.search_due {
+                    if now < due {
+                        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(due - now));
+                    } else {
+                        r.search_due = None;
+                        let q = r.commit_search.trim().to_string();
+                        if q.is_empty() {
+                            r.search_hits = None;
+                            r.stop_search();
+                        } else {
+                            let mut args: Vec<String> = vec!["log".into(), "--format=%H".into(), "-n3000".into()];
+                            args.extend(git::log_tip_args(&r.log_opts));
+                            if r.search_mode == 1 {
+                                args.push("--".into());
+                                args.push(format!("*{q}*"));
+                            } else {
+                                args.insert(1, format!("-G{}", regex_escape(&q)));
+                            }
+                            r.start_search(args);
+                        }
+                    }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let before = (r.log_opts.hide_stashes, r.log_opts.reflog, r.log_opts.first_parent, r.log_opts.only.clone());
@@ -1336,7 +1336,7 @@ impl App {
         } else if q.is_empty() || r.search_mode > 0 {
             (0..r.commits.len()).collect()
         } else {
-            r.commits.iter().enumerate().filter(|(_, c)| c.subject.to_lowercase().contains(&q) || c.author.to_lowercase().contains(&q) || c.sha.starts_with(&q)).map(|(i, _)| i).collect()
+            r.commits.iter().enumerate().filter(|(_, c)| contains_ci(&c.subject, &q) || contains_ci(&c.author, &q) || c.sha.starts_with(&q)).map(|(i, _)| i).collect()
         };
         let row_h = 24.0;
         let mut scroll = egui::ScrollArea::vertical().id_salt("commits").auto_shrink([false; 2]);
@@ -1462,6 +1462,7 @@ impl App {
         let mut do_commit = false;
         let mut flat = self.flat_files;
         let (low, high, guide) = (self.p.subject_low, self.p.subject_high, self.p.page_guide);
+        let bar = self.diff_bar();
         {
             let cmds = &self.cmds;
             let r = &mut self.tabs[self.active];
@@ -1569,11 +1570,14 @@ impl App {
                     });
                     return;
                 };
-                let pd = git::parse_diff(&r.file_diff);
+                // The diff on screen belongs to this file (a newly picked one may still be loading).
+                let ready = r.file_diff_key.as_ref().is_some_and(|(p, s)| *p == path && *s == staged_sel);
+                let d = r.file_diff.clone();
                 let untracked = r.status.iter().any(|f| f.path == path && f.index == '?');
                 let code = r.status.iter().find(|f| f.path == path).map(|f| if staged_sel { f.index } else if f.index == '?' { '?' } else { f.worktree }).unwrap_or('M');
-                // File header bar
-                egui::Frame::new().fill(theme::PANEL()).inner_margin(egui::Margin::symmetric(12, 7)).show(ui, |ui| {
+                let split_possible = !(ready && d.combined) && ui.available_width() >= diffview::SPLIT_MIN_WIDTH;
+                // File header bar with the diff toolbar on the right.
+                egui::Frame::new().fill(theme::PANEL()).inner_margin(egui::Margin::symmetric(12, 5)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         status_badge(ui, code);
@@ -1583,51 +1587,77 @@ impl App {
                             ui.label(RichText::new(dir).size(12.0).color(theme::TEXT_DIM()));
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if let Some(o) = diffview::toolbar(ui, &bar, split_possible) {
+                                acts.push(Act::DiffOpt(o));
+                            }
+                            ui.add_space(10.0);
                             ui.label(RichText::new(if staged_sel { tr("Staged", "Vorgemerkt") } else { tr("Unstaged", "Nicht vorgemerkt") }).size(11.5).color(theme::TEXT_FAINT()));
                         });
                     });
                 });
+                if !ready {
+                    loading_hint(ui);
+                    return;
+                }
                 egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 10, top: 6, bottom: 0 }).show(ui, |ui| {
-                    diff_facts(ui, &pd);
+                    diffview::facts(ui, &d);
                 });
-                egui::ScrollArea::both().id_salt("wdiff").auto_shrink([false; 2]).show(ui, |ui| {
-                    if pd.binary {
-                        return;
-                    }
-                    if pd.hunks.is_empty() {
-                        diff_body(ui, &r.file_diff);
-                    }
-                    for (hi, h) in pd.hunks.iter().enumerate() {
-                        // hunk toolbar (actions at the right of the hunk header)
-                        if !untracked {
-                            ui.horizontal(|ui| {
-                                ui.add_space(8.0);
-                                let (_, _, ctxs) = pd.hunk_info.get(hi).cloned().unwrap_or_default();
-                                ui.label(RichText::new(if ctxs.is_empty() { trs(format!("Hunk {}", hi + 1), format!("Abschnitt {}", hi + 1)) } else { ctxs }).size(11.5).color(theme::TEXT_FAINT()));
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    ui.add_space(8.0);
-                                    let patch = format!("{}{}", pd.header, h);
-                                    if staged_sel {
-                                        let b = ui.small_button(tr("Unstage Hunk", "Abschnitt zurücknehmen"));
-                                        if tip_with_cmd(b, tr("Remove only this hunk from staging", "Nur diesen Abschnitt aus der Vormerkung nehmen"), "git apply --cached --reverse").clicked() {
-                                            hunk = Some((patch.clone(), true, true));
-                                        }
-                                    } else {
-                                        let b = ui.small_button(tr("Discard Hunk", "Abschnitt verwerfen"));
-                                        if tip_with_cmd(b, tr("Throw away only this change in the file. Can't be undone.", "Verwirft nur diese Änderung in der Datei. Nicht rückgängig zu machen."), "git apply --reverse").clicked() {
-                                            hunk = Some((patch.clone(), true, false));
-                                        }
-                                        let b = ui.small_button(tr("Stage Hunk", "Abschnitt vormerken"));
-                                        if tip_with_cmd(b, tr("Stage only this hunk", "Nur diesen Abschnitt vormerken"), "git apply --cached").clicked() {
-                                            hunk = Some((patch.clone(), false, true));
-                                        }
-                                    }
-                                });
-                            });
+                if d.unified.is_empty() {
+                    diffview::empty_hint(ui, &d, &bar.opts);
+                    return;
+                }
+                // Hunk actions (at the right of each hunk's header), each offered only
+                // when the patch built from the diff on screen does exactly what it says.
+                let o = r.file_diff_opts;
+                let busy = !r.jobs_pending.is_empty() || r.file_diff_req < r.hunk_ok_from;
+                // Discard Hunk also needs the check whether git apply would change the file
+                // elsewhere (line ends, encoding, filters); it runs right after the diff loads.
+                let discard_block = match r.discard_checked {
+                    Some((req, false)) if req == r.file_diff_req => None,
+                    Some((req, true)) if req == r.file_diff_req => Some(tr("Not for this file: Git would rewrite it outside the hunk (its line ends don't match core.autocrlf or .gitattributes, or it has an encoding, ident or filter attribute). Discard the whole file instead.", "Nicht für diese Datei: Git würde sie auch außerhalb des Abschnitts umschreiben (ihre Zeilenenden passen nicht zu core.autocrlf oder .gitattributes, oder sie hat ein encoding-, ident- oder filter-Attribut). Stattdessen die ganze Datei verwerfen.")),
+                    _ => Some(tr("One moment: checking the file's line ends", "Einen Moment: die Zeilenenden der Datei werden geprüft")),
+                };
+                let mut hunk_bar = |ui: &mut egui::Ui, h: usize| {
+                    let why_not = if busy {
+                        // The diff on screen is from before the last hunk action.
+                        Some(tr("One moment: the last change is being applied and the diff reloaded", "Einen Moment: die letzte Änderung wird angewendet und der Diff neu geladen"))
+                    } else if o.ignore_ws {
+                        Some(tr("Not while “Ignore whitespace” is on: the hunk then doesn't match the file", "Nicht, solange „Leerzeichen ignorieren“ an ist: der Abschnitt passt dann nicht zur Datei"))
+                    } else if o.context == 0 && !o.full {
+                        Some(tr("Needs at least one line around the change (“More lines”): without it git can't check where the hunk belongs", "Braucht mindestens eine Zeile um die Änderung („Mehr Zeilen“): ohne sie kann git nicht prüfen, wohin der Abschnitt gehört"))
+                    } else if !d.hunk_safe(h) {
+                        Some(tr("Not for this hunk: it has characters that aren't UTF-8 (e.g. Windows-1252), which would change. Stage or discard the whole file instead.", "Nicht für diesen Abschnitt: er enthält Zeichen, die kein UTF-8 sind (z. B. Windows-1252) und sich ändern würden. Stattdessen die ganze Datei vormerken oder verwerfen."))
+                    } else {
+                        None
+                    };
+                    let ok = why_not.is_none();
+                    let off = why_not.unwrap_or("");
+                    let small = |t: &str| egui::Button::new(RichText::new(t).size(11.5)).small();
+                    if staged_sel {
+                        let b = ui.add_enabled(ok, small(tr("Unstage Hunk", "Abschnitt zurücknehmen"))).on_disabled_hover_text(off);
+                        if tip_with_cmd(b, tr("Remove only this hunk from staging", "Nur diesen Abschnitt aus der Vormerkung nehmen"), "git apply --cached --reverse").clicked() {
+                            hunk = Some((d.hunk_patch(h, true), true, true));
                         }
-                        diff_body(ui, h);
-                        ui.add_space(10.0);
+                    } else {
+                        // Discarding writes the file through git's conversions.
+                        let (dok, doff) = match discard_block {
+                            Some(why) if ok => (false, why),
+                            _ => (ok, off),
+                        };
+                        let b = ui.add_enabled(dok, small(tr("Discard Hunk", "Abschnitt verwerfen"))).on_disabled_hover_text(doff);
+                        if tip_with_cmd(b, tr("Throw away only this change in the file. Can't be undone.", "Verwirft nur diese Änderung in der Datei. Nicht rückgängig zu machen."), "git apply --reverse").clicked() {
+                            hunk = Some((d.hunk_patch(h, true), true, false));
+                        }
+                        let b = ui.add_enabled(ok, small(tr("Stage Hunk", "Abschnitt vormerken"))).on_disabled_hover_text(off);
+                        if tip_with_cmd(b, tr("Stage only this hunk", "Nur diesen Abschnitt vormerken"), "git apply --cached").clicked() {
+                            hunk = Some((d.hunk_patch(h, false), false, true));
+                        }
                     }
+                };
+                let with_bar = !untracked && d.hunks_applicable();
+                egui::ScrollArea::vertical().id_salt("wdiff").auto_shrink([false; 2]).show(ui, |ui| {
+                    let bar_fn: Option<&mut dyn FnMut(&mut egui::Ui, usize)> = if with_bar { Some(&mut hunk_bar) } else { None };
+                    diffview::draw(ui, Id::unique(("wdiff", &path, staged_sel)), &d, bar.look, bar_fn);
                 });
             });
         }
@@ -1643,6 +1673,9 @@ impl App {
             if reverse {
                 args.push("--reverse".into());
             }
+            // Exactly the hunk: apply.whitespace=fix in a user's config would change its
+            // trailing spaces.
+            args.push("--whitespace=nowarn".into());
             args.push("--unidiff-zero".into());
             args.push("-".into());
             let title = match (reverse, cached) {
@@ -1650,6 +1683,8 @@ impl App {
                 (true, true) => tr("Unstage hunk", "Abschnitt zurücknehmen"),
                 _ => tr("Discard hunk", "Abschnitt verwerfen"),
             };
+            // (The hunk buttons wait until this job ended and the diff was loaded again, see
+            // `App::spawn`.)
             self.quick_stdin(title.into(), args, patch, ctx);
         }
         if do_commit {
@@ -2169,7 +2204,7 @@ fn commit_menu(ui: &mut egui::Ui, cmds: &[catalog::Cmd], acts: &mut Vec<Act>, sh
     menu_item(ui, acts, tr("Copy Commit Info", "Commit-Info kopieren"), Act::Copy(format!("{short} {subject}")));
 }
 
-fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>, rules: &[super::extra::IssueRule]) {
+fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>, rules: &[super::extra::IssueRule], bar: &diffview::Bar) {
     egui::Frame::new().fill(theme::PANEL()).inner_margin(egui::Margin { left: 14, right: 14, top: 6, bottom: 0 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 18.0;
@@ -2191,10 +2226,16 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>, rules: &[su
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
     ui.painter().rect_filled(rect, 0, theme::LINE());
     let Some(d) = &r.detail else {
-        ui.add_space(10.0);
-        ui.label(RichText::new(tr("Select a commit", "Wähle einen Commit")).color(theme::TEXT_DIM()));
+        if r.wanted_detail.is_some() && r.bg_detail.busy() {
+            loading_hint(ui);
+        } else {
+            ui.add_space(10.0);
+            ui.label(RichText::new(tr("Select a commit", "Wähle einen Commit")).color(theme::TEXT_DIM()));
+        }
         return;
     };
+    // Diffs of files opened in the Commit tab that still have to be loaded.
+    let mut want: Vec<(String, String)> = vec![];
     match r.detail_tab {
         DetailTab::Commit => {
             egui::ScrollArea::vertical().id_salt("detail_commit").auto_shrink([false; 2]).show(ui, |ui| {
@@ -2268,9 +2309,16 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>, rules: &[su
                     ui.add_space(12.0);
                     let all_key = Id::unique(("expand-all", &d.sha));
                     let mut expand_all = ui.ctx().data(|m| m.get_temp::<bool>(all_key)).unwrap_or(false);
+                    // The opened diffs below get this width less their frame's border (a merge
+                    // conflict shows in one column anyway).
+                    let split_possible = ui.available_width() - 2.0 >= diffview::SPLIT_MIN_WIDTH;
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(trs(format!("{} changed files", d.files.len()), format!("{} geänderte Dateien", d.files.len()))).size(11.5).color(theme::TEXT_FAINT()));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if let Some(o) = diffview::toolbar(ui, bar, split_possible) {
+                                acts.push(Act::DiffOpt(o));
+                            }
+                            ui.add_space(12.0);
                             if ui.add(egui::Button::new(RichText::new(if expand_all { tr("Collapse All", "Alle zuklappen") } else { tr("Expand All", "Alle aufklappen") }).size(12.0)).frame(false)).clicked() {
                                 expand_all = !expand_all;
                                 ui.ctx().data_mut(|m| m.insert_temp(all_key, expand_all));
@@ -2301,20 +2349,23 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>, rules: &[su
                             acts.push(Act::DetailFile(path.clone()));
                         }
                         if is_open {
-                            let cache = Id::unique(("file-diff", &d.sha, path));
-                            let diff = match ui.ctx().data(|m| m.get_temp::<String>(cache)) {
-                                Some(t) => t,
-                                None => {
-                                    let t = git::commit_file_diff(&r.path, &d.sha, path);
-                                    ui.ctx().data_mut(|m| m.insert_temp(cache, t.clone()));
-                                    t
-                                }
-                            };
+                            let got = r.inline_diff(&d.sha, path);
+                            if got.is_none() {
+                                want.push((d.sha.clone(), path.clone()));
+                            }
                             egui::Frame::new().fill(theme::PANEL_DARK()).stroke(Stroke::new(1.0, theme::LINE())).corner_radius(3).inner_margin(egui::Margin::symmetric(0, 4)).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
-                                let pd = git::parse_diff(&diff);
-                                diff_facts(ui, &pd);
-                                diff_body(ui, &diff);
+                                match &got {
+                                    None => loading_hint(ui),
+                                    Some(diff) => {
+                                        egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 0)).show(ui, |ui| diffview::facts(ui, diff));
+                                        if diff.unified.is_empty() {
+                                            diffview::empty_hint(ui, diff, &bar.opts);
+                                        } else {
+                                            diffview::draw(ui, Id::unique(("inline", &d.sha, path)), diff, bar.look, None);
+                                        }
+                                    }
+                                }
                             });
                             ui.add_space(4.0);
                         }
@@ -2352,11 +2403,20 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>, rules: &[su
                     }
                 });
             });
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL_DARK()).inner_margin(egui::Margin::symmetric(0, 6))).show(ui, |ui| {
-                if r.detail_file.is_some() {
-                    diff_view(ui, &r.detail_diff, "ddiff");
-                } else {
-                    ui.label(RichText::new(tr("Select a file", "Wähle eine Datei")).color(theme::TEXT_DIM()));
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL_DARK()).inner_margin(0)).show(ui, |ui| {
+                match r.detail_file.as_deref() {
+                    Some(f) => {
+                        let ready = r.detail_diff_key.as_ref().is_some_and(|(s, p)| *s == d.sha && p == f);
+                        let code = d.files.iter().find(|x| x.1 == f).and_then(|x| x.0.chars().next()).unwrap_or('M');
+                        diff_panel(ui, acts, bar, code, f, if ready { Some(&*r.detail_diff) } else { None }, Id::unique(("ddiff", f)));
+                    }
+                    None => {
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(12.0);
+                            ui.label(RichText::new(tr("Select a file", "Wähle eine Datei")).color(theme::TEXT_DIM()));
+                        });
+                    }
                 }
             });
         }
@@ -2386,11 +2446,29 @@ fn detail_pane(ui: &mut egui::Ui, r: &mut Repo, acts: &mut Vec<Act>, rules: &[su
                 });
             });
             egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::PANEL_DARK()).inner_margin(10)).show(ui, |ui| {
+                if r.tree_file.is_some() && r.tree_content_for != r.tree_file {
+                    loading_hint(ui);
+                    return;
+                }
                 egui::ScrollArea::both().id_salt("tcontent").auto_shrink([false; 2]).show(ui, |ui| {
                     ui.add(egui::Label::new(RichText::new(&r.tree_content).monospace().size(12.0)).extend());
                 });
             });
         }
+    }
+    for (sha, file) in want {
+        r.ensure_inline(&sha, &file);
+    }
+}
+
+/// `hay` contains `needle` (given in lower case), ignoring case. Runs for every commit in every
+/// frame while the history is filtered, so ASCII text is compared without allocating.
+fn contains_ci(hay: &str, needle: &str) -> bool {
+    if needle.is_ascii() {
+        let (h, n) = (hay.as_bytes(), needle.as_bytes());
+        n.is_empty() || h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
+    } else {
+        hay.to_lowercase().contains(needle)
     }
 }
 

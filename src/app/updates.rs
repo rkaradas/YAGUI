@@ -20,8 +20,16 @@ pub enum StartMode {
 
 pub static START_MODE: OnceLock<StartMode> = OnceLock::new();
 
+/// The folder to uninstall (`--uninstall --dir <folder>`, as Settings > Apps starts it);
+/// without it the standard folder.
+pub static UNINSTALL_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+fn uninstall_dir() -> std::path::PathBuf {
+    UNINSTALL_DIR.get().cloned().unwrap_or_else(installer::default_dir)
+}
+
 pub enum Msg {
-    Checked(Result<Option<Release>, String>, bool),
+    Checked(Result<Option<Release>, updater::CheckErr>, bool),
     Installed(Result<std::path::PathBuf, String>),
 }
 
@@ -32,7 +40,10 @@ pub enum UState {
     Checking,
     UpToDate(Option<Release>),
     Available(Release),
-    Failed(String),
+    /// The check failed: the reason, and whether signing in to GitHub would help.
+    Failed(String, bool),
+    /// Downloading or putting the new program in place failed.
+    InstallFailed(String),
     Downloading(Release),
     Ready(Release),
 }
@@ -125,7 +136,7 @@ impl App {
             }
             Msg::Checked(Err(e), silent) => {
                 if !silent {
-                    self.upd.state = UState::Failed(e);
+                    self.upd.state = UState::Failed(e.text(), e.sign_in_helps());
                 }
             }
             Msg::Installed(res) => {
@@ -135,7 +146,7 @@ impl App {
                 };
                 self.upd.state = match res {
                     Ok(_) => UState::Ready(rel),
-                    Err(e) => UState::Failed(e),
+                    Err(e) => UState::InstallFailed(e),
                 };
             }
         }
@@ -191,9 +202,14 @@ impl App {
                             });
                         });
                     }
-                    UState::Failed(e) => {
+                    UState::Failed(e, sign_in) => {
                         ui.label(RichText::new(trs(format!("Could not check for updates: {e}"), format!("Konnte nicht nach Updates suchen: {e}"))).color(theme::RED()));
-                        ui.label(RichText::new(tr("For a private repository, sign in to GitHub under File > Accounts.", "Bei einem privaten Repository unter Datei > Konten bei GitHub anmelden.")).size(12.0).color(theme::TEXT_FAINT()));
+                        if *sign_in {
+                            ui.label(RichText::new(tr("For a private repository, sign in to GitHub under File > Accounts.", "Bei einem privaten Repository unter Datei > Konten bei GitHub anmelden.")).size(12.0).color(theme::TEXT_FAINT()));
+                        }
+                    }
+                    UState::InstallFailed(e) => {
+                        ui.label(RichText::new(trs(format!("Could not install the update: {e}"), format!("Konnte das Update nicht installieren: {e}"))).color(theme::RED()));
                     }
                     UState::Available(r) | UState::Downloading(r) | UState::Ready(r) => {
                         ui.label(RichText::new(trs(format!("Version {} is available", r.tag), format!("Version {} ist verfügbar", r.tag))).font(FontId::new(14.0, theme::semibold())));
@@ -211,6 +227,22 @@ impl App {
                         }
                         if r.asset_for_this_computer().is_none() {
                             ui.label(RichText::new(trs(format!("This release has no file for {}. Download it from the release page.", version::platform()), format!("Diese Version hat keine Datei für {}. Lade sie von der Release-Seite.", version::platform()))).size(12.0).color(theme::ORANGE()));
+                        } else if let Some(b) = updater::self_update_blocker() {
+                            let text = match b {
+                                updater::Blocker::Package(p) => trs(
+                                    format!("YAGUI was installed as a package ({p}). Install the new .deb from the release page."),
+                                    format!("YAGUI wurde als Paket installiert ({p}). Installiere das neue .deb von der Release-Seite."),
+                                ),
+                                updater::Blocker::NoWrite(why) if cfg!(target_os = "macos") => trs(
+                                    format!("YAGUI may not replace itself here ({why}). Move YAGUI to Applications and start it from there, or download the new version from the release page."),
+                                    format!("YAGUI darf sich hier nicht selbst ersetzen ({why}). Ziehe YAGUI nach „Programme“ und starte es von dort, oder lade die neue Version von der Release-Seite."),
+                                ),
+                                updater::Blocker::NoWrite(why) => trs(
+                                    format!("YAGUI may not replace itself here ({why}). Download the new version from the release page."),
+                                    format!("YAGUI darf sich hier nicht selbst ersetzen ({why}). Lade die neue Version von der Release-Seite."),
+                                ),
+                            };
+                            ui.label(RichText::new(text).size(12.0).color(theme::ORANGE()));
                         }
                     }
                 }
@@ -222,7 +254,7 @@ impl App {
                         let primary = |ui: &mut egui::Ui, l: &str, en: bool| ui.add_enabled(en, egui::Button::new(RichText::new(l).color(Color32::WHITE)).fill(theme::ACCENT_DARK()).min_size(Vec2::new(90.0, 26.0))).clicked();
                         match &self.upd.state {
                             UState::Available(r) => {
-                                if primary(ui, tr("Download and install", "Herunterladen und installieren"), r.asset_for_this_computer().is_some()) {
+                                if primary(ui, tr("Download and install", "Herunterladen und installieren"), r.asset_for_this_computer().is_some() && updater::self_update_blocker().is_none()) {
                                     install = Some(r.clone());
                                 }
                                 if ui.button(tr("Release page", "Release-Seite")).clicked() {
@@ -296,7 +328,16 @@ impl App {
             .show(ctx, |ui| {
                 ui.set_width(500.0);
                 ui.horizontal(|ui| {
-                    let tex = ui.ctx().load_texture("setup_icon", egui::ColorImage::from_rgba_unmultiplied([64, 64], &crate::appicon::icon_pixels(64)), egui::TextureOptions::LINEAR);
+                    // Made once, not in every frame.
+                    let tex_id = Id::unique("setup_icon_tex");
+                    let tex = match ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(tex_id)) {
+                        Some(t) => t,
+                        None => {
+                            let t = ui.ctx().load_texture("setup_icon", egui::ColorImage::from_rgba_unmultiplied([64, 64], &crate::appicon::icon_pixels(64)), egui::TextureOptions::LINEAR);
+                            ui.ctx().data_mut(|d| d.insert_temp(tex_id, t.clone()));
+                            t
+                        }
+                    };
                     ui.image((tex.id(), Vec2::splat(48.0)));
                     ui.vertical(|ui| {
                         ui.label(RichText::new("YAGUI").font(FontId::new(18.0, theme::semibold())));
@@ -330,7 +371,7 @@ impl App {
                         ui.label(RichText::new(tr("Uninstall any time under Settings > Apps or Help > Uninstall YAGUI.", "Deinstallieren jederzeit unter Einstellungen > Apps oder Hilfe > YAGUI deinstallieren.")).size(12.0).color(theme::TEXT_FAINT()));
                     }
                     (SetupMode::Uninstall, None) => {
-                        ui.label(trs(format!("Remove YAGUI from {}?", installer::default_dir().display()), format!("YAGUI aus {} entfernen?", installer::default_dir().display())));
+                        ui.label(trs(format!("Remove YAGUI from {}?", uninstall_dir().display()), format!("YAGUI aus {} entfernen?", uninstall_dir().display())));
                         ui.label(RichText::new(tr("Shortcuts, Explorer entries and the Apps entry are removed too. Your repositories are not touched.", "Verknüpfungen, Explorer-Einträge und der Apps-Eintrag werden mit entfernt. Deine Repositories bleiben unberührt.")).size(12.0).color(theme::TEXT_DIM()));
                         ui.checkbox(&mut d.remove_settings, tr("Also delete my YAGUI settings", "Auch meine YAGUI-Einstellungen löschen"));
                     }
@@ -395,7 +436,11 @@ impl App {
         if run {
             d.result = Some(match d.mode {
                 SetupMode::Install => installer::install(&d.opts),
-                SetupMode::Uninstall => installer::uninstall(&installer::default_dir(), d.remove_settings, true).map(|_| installer::default_dir()),
+                SetupMode::Uninstall => {
+                    let u = installer::UninstallOptions { remove_settings: d.remove_settings, ..Default::default() };
+                    let dir = uninstall_dir();
+                    installer::uninstall(&dir, &u).map(|_| dir)
+                }
             });
         }
         if launch {

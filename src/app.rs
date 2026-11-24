@@ -3,17 +3,25 @@
 
 mod auth;
 mod dialogs;
+mod diffmodel;
+mod diffview;
 mod extra;
 mod manager;
+pub mod perf;
 mod tree;
 mod ui;
 pub mod updates;
+
+/// The window's egui context, so background loaders can ask for a repaint when they are done.
+pub(crate) static REPAINT: std::sync::OnceLock<egui::Context> = std::sync::OnceLock::new();
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use eframe::egui;
+
+use diffmodel::Diff;
 
 use crate::catalog::{self, Arg, Cmd, Danger, Kind, Value, P};
 use crate::i18n::{self, tr, trs, Lang};
@@ -70,14 +78,21 @@ pub struct Repo {
     detail: Option<CommitDetail>,
     detail_tab: DetailTab,
     detail_file: Option<String>,
-    detail_diff: String,
+    detail_diff: Arc<Diff>,
+    /// Which (commit, file) `detail_diff` shows.
+    detail_diff_key: Option<(String, String)>,
     tree: Vec<String>,
     tree_file: Option<String>,
     tree_content: String,
+    /// The file `tree_content` belongs to (a newly picked one may still be loading).
+    tree_content_for: Option<String>,
     filter: String,
     commit_search: String,
     sel_file: Option<(String, bool)>,
-    file_diff: String,
+    file_diff: Arc<Diff>,
+    /// Which (file, staged) `file_diff` shows, and the options it was made with.
+    file_diff_key: Option<(String, bool)>,
+    file_diff_opts: git::DiffOpts,
     commit_msg: String,
     commit_desc: String,
     amend: bool,
@@ -85,23 +100,318 @@ pub struct Repo {
     error: Option<String>,
     log_opts: git::LogOptions,
     git_dir: Option<PathBuf>,
+    /// The repository's common folder (differs from `git_dir` in a linked worktree).
+    common_dir: Option<PathBuf>,
     snap: git::Snapshot,
     locked: Option<&'static str>,
     /// Commit search: 0 message/author/SHA, 1 path, 2 diff content.
     search_mode: usize,
     search_hits: Option<std::collections::HashSet<String>>,
+    /// When the path/content search is to ask git (window time; set while typing).
+    search_due: Option<f64>,
+    /// A running path/content search, tagged with (mode, text) it was made for.
+    bg_search: Bg<((usize, String), std::collections::HashSet<String>)>,
     /// Local branches, most recently committed first (sidebar sort "Recently used").
     branch_recency: Vec<String>,
     /// (stash@{n}, commit) of every stash.
     stash_shas: Vec<(String, String)>,
     /// The stash picked in the sidebar (highlighted there).
     stash_sel: Option<String>,
+    /// Diff options of the diff toolbar (context, whitespace, whole file).
+    diff_opts: git::DiffOpts,
+    /// The options changed while the tab was in the background: reload its diffs when shown.
+    diff_stale: bool,
+    /// Loading has been asked for at least once (a tab loads when it is first shown).
+    started: bool,
+    /// The history has been shown at least once (then the first commit gets selected).
+    shown_once: bool,
+    // Background work. Git never runs on the window's thread for these; the results are taken
+    // over by `poll_bg` at the start of a frame, until then the old state stays on screen.
+    bg_load: Bg<Loaded>,
+    load_started: Option<std::time::Instant>,
+    /// Reload flags asked for while a load runs; they start when it ends.
+    queued: u32,
+    /// The commit whose details are wanted (late results for others are dropped).
+    wanted_detail: Option<String>,
+    bg_detail: Bg<(String, CommitDetail, Option<Vec<String>>)>,
+    /// The Changes tab opens the first file of the commit whose details are loading.
+    open_first_file: bool,
+    /// (file, staged, options, request number, diff).
+    bg_file: Bg<(String, bool, git::DiffOpts, u64, Arc<Diff>)>,
+    /// Requests for `file_diff` so far, and the one on screen.
+    file_req: u64,
+    file_diff_req: u64,
+    /// Running commands that change this repository (hunk actions, staging files, commits …);
+    /// until they ended and a diff requested after that (number `hunk_ok_from` or later) is on
+    /// screen, hunk buttons wait: the diff before no longer matches the files, and applying a
+    /// hunk from it would apply twice or in the wrong place.
+    jobs_pending: Vec<u64>,
+    hunk_ok_from: u64,
+    /// The repository's tab width (Repository Settings), for its diffs' column counts.
+    tab_width: usize,
+    /// Checking whether Discard Hunk would change the shown file elsewhere: (diff request, yes).
+    bg_eol: Bg<(u64, bool)>,
+    discard_checked: Option<(u64, bool)>,
+    /// A watched lock file has existed since (see `poll_changes`).
+    busy_since: Option<std::time::Instant>,
+    /// A quick status of a tab not shown yet (for the changes dot in the tab list).
+    bg_peek: Bg<Vec<FileStatus>>,
+    peeked: bool,
+    /// Finding the commit of a branch, tag or id that the loaded commits don't name.
+    bg_jump: Bg<String>,
+    bg_ddiff: Bg<(String, String, git::DiffOpts, Arc<Diff>)>,
+    bg_tree: Bg<(String, Vec<String>)>,
+    bg_tree_file: Bg<(String, String, String)>,
+    /// Diffs of files opened in the Commit tab, by (commit, path), made with `inline_opts`.
+    inline: std::collections::HashMap<(String, String), Arc<Diff>>,
+    inline_opts: git::DiffOpts,
+    /// The tab width `inline` was made with.
+    inline_tab: usize,
+    bg_inline: Vec<(String, String, Bg<Arc<Diff>>)>,
+}
+
+/// A full reload: also checks that the folder is (still) a repository.
+const FULL: u32 = u32::MAX;
+
+/// A command makes the hunk buttons wait (see `Repo::jobs_pending`) when it can change the
+/// files or the index and YAGUI learns when it ends: not a program started on its own
+/// (merge tool, `citool`), not an automatic fetch, and not git commands that only touch refs,
+/// remotes or the network.
+fn blocks_hunks(spec: &JobSpec) -> bool {
+    if !spec.changes_repo || spec.automatic || spec.detached {
+        return false;
+    }
+    if spec.program != "git" {
+        return true;
+    }
+    // The git command and its subcommand: the first arguments that aren't options (or the
+    // value of a `-c`).
+    let mut args = spec.args.iter();
+    let mut words: Vec<&str> = vec![];
+    while let Some(a) = args.next() {
+        if a == "-c" || a == "-C" {
+            args.next();
+        } else if !a.starts_with('-') {
+            words.push(a);
+            if words.len() == 2 {
+                break;
+            }
+        }
+    }
+    let cmd = words.first().copied().unwrap_or("");
+    let sub = words.get(1).copied().unwrap_or("");
+    match cmd {
+        "push" | "fetch" | "clone" | "gc" | "maintenance" | "remote" | "tag" | "notes" | "config" | "prune" | "repack" | "fsck" | "count-objects" | "bundle" | "archive" | "ls-remote" | "branch" | "worktree" | "reflog" | "describe" | "log" | "show" | "shortlog" | "blame" => false,
+        // Tools with subcommands: only those that update the work tree count.
+        "lfs" => matches!(sub, "pull" | "checkout" | "migrate" | "install" | "uninstall" | "update"),
+        "svn" => matches!(sub, "rebase" | "dcommit" | "reset" | ""),
+        "p4" => matches!(sub, "rebase" | "submit" | "unshelve" | ""),
+        _ => true,
+    }
+}
+
+/// Work done in a background thread. Its result is taken over at the start of a later frame.
+/// Starting again, `stop` or dropping it stops the previous work: its result is dropped and
+/// the git process it waits for is ended (`git::set_thread_cancel`), so replaced loads don't
+/// pile up on a slow computer.
+struct Bg<T> {
+    rx: Option<std::sync::mpsc::Receiver<T>>,
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+impl<T> Default for Bg<T> {
+    fn default() -> Self {
+        Bg { rx: None, cancel: None }
+    }
+}
+
+impl<T> Drop for Bg<T> {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl<T> Bg<T> {
+    fn stop(&mut self) {
+        if let Some(c) = self.cancel.take() {
+            c.store(true, Ordering::Relaxed);
+        }
+        self.rx = None;
+    }
+
+    fn busy(&self) -> bool {
+        self.rx.is_some()
+    }
+}
+
+impl<T: Send + 'static> Bg<T> {
+    fn start(&mut self, f: impl FnOnce() -> T + Send + 'static) {
+        self.stop();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let flag = Arc::new(AtomicBool::new(false));
+        let mine = flag.clone();
+        std::thread::spawn(move || {
+            git::set_thread_cancel(Some(mine));
+            let v = f();
+            if tx.send(v).is_ok() {
+                if let Some(c) = REPAINT.get() {
+                    c.request_repaint();
+                }
+            }
+        });
+        self.rx = Some(rx);
+        self.cancel = Some(flag);
+    }
+
+    fn take(&mut self) -> Option<T> {
+        let got = self.rx.as_ref()?.try_recv();
+        match got {
+            Ok(v) => {
+                self.rx = None;
+                self.cancel = None;
+                Some(v)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.rx = None;
+                self.cancel = None;
+                None
+            }
+        }
+    }
+}
+
+/// What a background reload found; `Repo::apply` takes it over in one go.
+#[derive(Default)]
+struct Loaded {
+    flags: u32,
+    not_repo: bool,
+    /// (.git folder, common folder), found by a full load.
+    dirs: Option<(PathBuf, PathBuf)>,
+    history: Option<History>,
+    config: Option<(Vec<(String, String)>, Vec<String>)>,
+    status: Option<Vec<FileStatus>>,
+    /// The reload flags whose watched files this load read (their snapshot entries count).
+    covered: u32,
+    state: Option<(Option<&'static str>, Option<&'static str>)>,
+    snap: Option<git::Snapshot>,
+}
+
+struct History {
+    head: String,
+    commits: Vec<Commit>,
+    rows: Vec<graph::Row>,
+    lanes: usize,
+    local: Vec<RefInfo>,
+    remote_branches: Vec<RefInfo>,
+    tags: Vec<RefInfo>,
+    stashes: Vec<(String, String)>,
+    stash_shas: Vec<(String, String)>,
+    stash_tips: Vec<String>,
+    branch_recency: Vec<String>,
+    worktrees: Vec<(String, String)>,
+}
+
+/// Runs the git commands a reload with `flags` needs (the reload flags of the .git folder
+/// watch). Runs in a background thread.
+fn load(path: PathBuf, dirs: Option<(PathBuf, PathBuf)>, flags: u32, mut log_opts: git::LogOptions) -> Loaded {
+    let t0 = std::time::Instant::now();
+    let p = &path;
+    let mut l = Loaded { flags, ..Default::default() };
+    // (The .git folder and the repository's common folder, see `git::common_dir`.)
+    let mut dirs = dirs;
+    if flags == FULL {
+        if git::find_toplevel(p).is_none() {
+            l.not_repo = true;
+            return l;
+        }
+        dirs = git::git_dir(p).map(|g| {
+            let common = git::common_dir(p).unwrap_or_else(|| g.clone());
+            (g, common)
+        });
+        l.dirs = dirs.clone();
+    }
+    let git_dir = dirs.as_ref().map(|d| d.0.clone());
+    // Taken first: a change during the load is then seen by the next look at .git.
+    l.snap = dirs.as_ref().map(|(g, c)| git::snapshot(g, c));
+    if flags != FULL && (!p.exists() || git_dir.as_ref().is_some_and(|g| !g.exists())) {
+        // The folder was moved or deleted while open: say so instead of showing it empty.
+        l.not_repo = true;
+        return l;
+    }
+    if flags & (git::RELOAD_HEAD | git::RELOAD_REFS | git::RELOAD_REFTABLE) != 0 {
+        let head = git::head_name(p);
+        let stashes = git::stash_commits(p);
+        log_opts.stash_tips = stashes.iter().map(|s| s.1.clone()).collect();
+        let mut commits = git::load_commits(p, 3000, &log_opts);
+        // Show every stash as one row labelled stash@{n} and leave out
+        // Git's helper commits ("index on …", "untracked files on …").
+        let helpers: std::collections::HashSet<&String> = stashes.iter().flat_map(|s| s.2.iter().skip(1)).collect();
+        commits.retain(|c| !helpers.contains(&c.sha));
+        for c in commits.iter_mut() {
+            if let Some(s) = stashes.iter().find(|s| s.1 == c.sha) {
+                c.parents.truncate(1);
+                c.refs.retain(|r| r != "refs/stash");
+                c.refs.insert(0, s.0.clone());
+            }
+        }
+        let (rows, lanes) = graph::layout(&commits);
+        let (local, remote_branches, tags) = git::load_refs(p);
+        l.history = Some(History {
+            head,
+            rows,
+            lanes: lanes.min(14),
+            local,
+            remote_branches,
+            tags,
+            stashes: git::load_stashes(p),
+            stash_shas: stashes.iter().map(|s| (s.0.clone(), s.1.clone())).collect(),
+            stash_tips: log_opts.stash_tips.clone(),
+            branch_recency: git::run(p, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"]).stdout.lines().map(String::from).collect(),
+            worktrees: git::load_worktrees(p),
+            commits,
+        });
+    }
+    if flags & git::RELOAD_CONFIG != 0 {
+        l.config = Some((git::load_remotes(p), git::load_submodules(p)));
+    }
+    if flags & (git::RELOAD_INDEX | git::RELOAD_IGNORE | git::RELOAD_HEAD | git::RELOAD_STATE) != 0 {
+        l.status = Some(git::load_status(p));
+    }
+    if flags & (git::RELOAD_STATE | git::RELOAD_HEAD | git::RELOAD_INDEX) != 0 {
+        l.state = Some(match git_dir.as_deref() {
+            Some(g) => (git::repo_state_at(g), git::repo_locked_at(g)),
+            None => (None, None),
+        });
+    }
+    // Which watched files this load has read the current state of (see `Repo::apply`).
+    l.covered = if flags == FULL {
+        FULL
+    } else {
+        let mut c = 0;
+        if l.history.is_some() {
+            c |= git::RELOAD_HEAD | git::RELOAD_REFS | git::RELOAD_REFTABLE;
+        }
+        if l.config.is_some() {
+            c |= git::RELOAD_CONFIG;
+        }
+        if l.status.is_some() {
+            c |= git::RELOAD_INDEX | git::RELOAD_IGNORE;
+        }
+        if l.state.is_some() {
+            c |= git::RELOAD_STATE;
+        }
+        c
+    };
+    perf::took(&format!("load {flags:#x} {}", path.display()), t0);
+    l
 }
 
 impl Repo {
-    fn open(path: PathBuf) -> Self {
+    /// A tab for `path`; nothing is loaded until `refresh` (tabs load when first shown).
+    fn new(path: PathBuf) -> Self {
         let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.display().to_string());
-        let mut r = Repo {
+        Repo {
             path,
             name,
             head: String::new(),
@@ -122,14 +432,18 @@ impl Repo {
             detail: None,
             detail_tab: DetailTab::Commit,
             detail_file: None,
-            detail_diff: String::new(),
+            detail_diff: Arc::new(Diff::default()),
+            detail_diff_key: None,
             tree: vec![],
             tree_file: None,
             tree_content: String::new(),
+            tree_content_for: None,
             filter: String::new(),
             commit_search: String::new(),
             sel_file: None,
-            file_diff: String::new(),
+            file_diff: Arc::new(Diff::default()),
+            file_diff_key: None,
+            file_diff_opts: git::DiffOpts::default(),
             commit_msg: String::new(),
             commit_desc: String::new(),
             amend: false,
@@ -137,99 +451,285 @@ impl Repo {
             error: None,
             log_opts: git::LogOptions { all: true, ..Default::default() },
             git_dir: None,
+            common_dir: None,
             snap: vec![],
             locked: None,
             search_mode: 0,
             search_hits: None,
+            search_due: None,
+            bg_search: Bg::default(),
             branch_recency: vec![],
             stash_shas: vec![],
             stash_sel: None,
-        };
-        r.refresh();
-        if !r.commits.is_empty() {
-            r.select_commit(0);
+            diff_opts: git::DiffOpts::default(),
+            diff_stale: false,
+            started: false,
+            shown_once: false,
+            bg_load: Bg::default(),
+            load_started: None,
+            queued: 0,
+            wanted_detail: None,
+            bg_detail: Bg::default(),
+            open_first_file: false,
+            bg_file: Bg::default(),
+            file_req: 0,
+            file_diff_req: 0,
+            jobs_pending: vec![],
+            hunk_ok_from: 0,
+            tab_width: 4,
+            bg_eol: Bg::default(),
+            discard_checked: None,
+            busy_since: None,
+            bg_peek: Bg::default(),
+            peeked: false,
+            bg_jump: Bg::default(),
+            bg_ddiff: Bg::default(),
+            bg_tree: Bg::default(),
+            bg_tree_file: Bg::default(),
+            inline: Default::default(),
+            inline_opts: git::DiffOpts::default(),
+            inline_tab: 0,
+            bg_inline: vec![],
         }
-        r
     }
 
+    /// Loads everything again (in the background). A tab that was never shown waits until it
+    /// is (`show`): many tabs loading at once would keep a slow computer busy for long.
     fn refresh(&mut self) {
-        let p = self.path.clone();
-        if git::find_toplevel(&p).is_none() {
+        if self.started {
+            self.request(FULL);
+        }
+    }
+
+    /// Reloads only what a change touched (in the background); see `refresh`.
+    fn reload(&mut self, flags: u32) {
+        if self.started {
+            self.request(flags);
+        }
+    }
+
+    fn request(&mut self, flags: u32) {
+        self.started = true;
+        if self.bg_load.busy() {
+            self.queued |= flags;
+            return;
+        }
+        // Until a full load has found the .git folder (or when the folder is no repository),
+        // any reload is a full one: only that sets up the watch, the state and the history.
+        let flags = if self.git_dir.is_none() { FULL } else { flags };
+        let (path, git_dir, log_opts) = (self.path.clone(), self.git_dirs(), self.log_opts.clone());
+        self.load_started = Some(std::time::Instant::now());
+        self.bg_load.start(move || load(path, git_dir, flags, log_opts));
+    }
+
+    /// The tab is shown: load it the first time, later catch up with what changed meanwhile
+    /// (its .git folder is only watched while it is the active tab).
+    fn show(&mut self) {
+        if !self.started {
+            self.request(FULL);
+            return;
+        }
+        if self.diff_stale {
+            self.reload_diffs();
+        }
+        let changed = self.git_dirs().map(|(g, c)| git::changed_flags(&self.snap, &git::snapshot(&g, &c))).unwrap_or(0);
+        self.reload(changed | git::RELOAD_INDEX);
+    }
+
+    /// (.git folder, common folder) once a full load found them.
+    fn git_dirs(&self) -> Option<(PathBuf, PathBuf)> {
+        let g = self.git_dir.clone()?;
+        let c = self.common_dir.clone().unwrap_or_else(|| g.clone());
+        Some((g, c))
+    }
+
+    /// How long the running background load has been at work (for a hint in the status bar).
+    fn loading_for(&self) -> Option<std::time::Duration> {
+        self.bg_load.busy().then(|| self.load_started.map(|t| t.elapsed())).flatten()
+    }
+
+    /// Takes over what background work has finished.
+    fn poll_bg(&mut self) {
+        if let Some(l) = self.bg_load.take() {
+            self.apply(l);
+            if self.queued != 0 {
+                let q = std::mem::take(&mut self.queued);
+                self.request(q);
+            }
+        }
+        if let Some((sha, d, tree)) = self.bg_detail.take() {
+            if self.wanted_detail.as_deref() == Some(sha.as_str()) {
+                let first_file = d.files.first().map(|f| f.1.clone());
+                self.detail = Some(d);
+                if let Some(t) = tree {
+                    self.tree = t;
+                } else if self.detail_tab == DetailTab::Tree && self.tree.is_empty() {
+                    // The File Tree tab was opened while the details were loading.
+                    self.load_tree();
+                }
+                // The Changes tab shows the first file right away (as when switching to it);
+                // a refresh of the same commit leaves what is open.
+                if std::mem::take(&mut self.open_first_file) && self.detail_tab == DetailTab::Changes && self.detail_file.is_none() {
+                    if let Some(f) = first_file {
+                        self.load_detail_diff(f);
+                    }
+                }
+            }
+        }
+        if let Some((path, staged, opts, req, d)) = self.bg_file.take() {
+            if self.sel_file.as_ref() == Some(&(path.clone(), staged)) && opts == self.diff_opts {
+                // Discard Hunk waits until it is known whether git apply would change the file
+                // outside the hunk (line ends, encoding, filters); only for a tracked file's
+                // unstaged hunks.
+                let tracked = self.status.iter().any(|f| f.path == path && f.index != '?');
+                if !staged && tracked && d.hunks_applicable() && !d.hunks.is_empty() {
+                    let (dir, p) = (self.path.clone(), path.clone());
+                    self.bg_eol.start(move || (req, git::discard_changes_file(&dir, &p)));
+                } else {
+                    self.bg_eol.stop();
+                }
+                self.file_diff = d;
+                self.file_diff_key = Some((path, staged));
+                self.file_diff_opts = opts;
+                self.file_diff_req = req;
+            }
+        }
+        if let Some((req, risky)) = self.bg_eol.take() {
+            self.discard_checked = Some((req, risky));
+        }
+        if let Some(s) = self.bg_peek.take() {
+            if !self.started {
+                self.status = s;
+            }
+        }
+        if let Some(sha) = self.bg_jump.take() {
+            self.jump_to(&sha);
+        }
+        if let Some((sha, path, opts, d)) = self.bg_ddiff.take() {
+            if self.detail.as_ref().map(|x| x.sha.as_str()) == Some(sha.as_str()) && self.detail_file.as_deref() == Some(path.as_str()) && opts == self.diff_opts {
+                self.detail_diff = d;
+                self.detail_diff_key = Some((sha, path));
+            }
+        }
+        if let Some((sha, t)) = self.bg_tree.take() {
+            if self.detail.as_ref().map(|x| x.sha.as_str()) == Some(sha.as_str()) {
+                self.tree = t;
+            }
+        }
+        if let Some((sha, path, content)) = self.bg_tree_file.take() {
+            if self.detail.as_ref().map(|x| x.sha.as_str()) == Some(sha.as_str()) && self.tree_file.as_deref() == Some(path.as_str()) {
+                self.tree_content = content;
+                self.tree_content_for = Some(path);
+            }
+        }
+        if let Some((key, hits)) = self.bg_search.take() {
+            if key == (self.search_mode, self.commit_search.trim().to_string()) {
+                self.search_hits = Some(hits);
+            }
+        }
+        let mut done = vec![];
+        for (sha, path, bg) in self.bg_inline.iter_mut() {
+            if let Some(d) = bg.take() {
+                done.push((sha.clone(), path.clone(), d));
+            }
+        }
+        self.bg_inline.retain(|(_, _, bg)| bg.busy());
+        for (sha, path, d) in done {
+            self.inline.insert((sha, path), d);
+        }
+    }
+
+    fn apply(&mut self, l: Loaded) {
+        if l.not_repo {
             self.error = Some(tr("This folder is not a Git repository (any more).", "Dieser Ordner ist (nicht mehr) ein Git-Repository.").into());
+            // The watch compares with this, so a missing folder isn't reloaded every second.
+            if let Some(s) = l.snap {
+                self.snap = s;
+            }
             return;
         }
         self.error = None;
-        self.git_dir = git::git_dir(&p);
-        self.reload(u32::MAX);
-    }
-
-    /// Reloads only what a change touched, using the reload flags of the .git folder watch.
-    fn reload(&mut self, flags: u32) {
-        let p = self.path.clone();
-        if flags & (git::RELOAD_HEAD | git::RELOAD_REFS | git::RELOAD_REFTABLE) != 0 {
-            self.head = git::head_name(&p);
+        if l.flags == FULL {
+            self.git_dir = l.dirs.as_ref().map(|d| d.0.clone());
+            self.common_dir = l.dirs.map(|d| d.1);
+        }
+        if let Some(h) = l.history {
             let sel_sha = self.selected.and_then(|i| self.commits.get(i)).map(|c| c.sha.clone());
-            let stashes = git::stash_commits(&p);
-            self.log_opts.stash_tips = stashes.iter().map(|s| s.1.clone()).collect();
-            self.commits = git::load_commits(&p, 3000, &self.log_opts);
-            // Show every stash as one row labelled stash@{n} and leave out
-            // Git's helper commits ("index on …", "untracked files on …").
-            let helpers: std::collections::HashSet<&String> = stashes.iter().flat_map(|s| s.2.iter().skip(1)).collect();
-            self.commits.retain(|c| !helpers.contains(&c.sha));
-            for c in self.commits.iter_mut() {
-                if let Some(s) = stashes.iter().find(|s| s.1 == c.sha) {
-                    c.parents.truncate(1);
-                    c.refs.retain(|r| r != "refs/stash");
-                    c.refs.insert(0, s.0.clone());
-                }
-            }
-            self.stash_shas = stashes.iter().map(|s| (s.0.clone(), s.1.clone())).collect();
-            let (rows, lanes) = graph::layout(&self.commits);
-            self.rows = rows;
-            self.lanes = lanes.min(14);
-            let (l, r, t) = git::load_refs(&p);
-            self.local = l;
-            self.remote_branches = r;
-            self.tags = t;
-            self.stashes = git::load_stashes(&p);
-            self.branch_recency = git::run(&p, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"]).stdout.lines().map(String::from).collect();
-            self.worktrees = git::load_worktrees(&p);
+            self.head = h.head;
+            self.log_opts.stash_tips = h.stash_tips;
+            self.commits = h.commits;
+            self.rows = h.rows;
+            self.lanes = h.lanes;
+            self.local = h.local;
+            self.remote_branches = h.remote_branches;
+            self.tags = h.tags;
+            self.stashes = h.stashes;
+            self.stash_shas = h.stash_shas;
+            self.branch_recency = h.branch_recency;
+            self.worktrees = h.worktrees;
+            let first = !self.shown_once;
+            self.shown_once = true;
             self.selected = sel_sha.and_then(|s| self.commits.iter().position(|c| c.sha == s));
-            if let Some(i) = self.selected {
-                self.detail = None;
-                self.select_commit(i);
-            } else {
-                self.detail = None;
+            match self.selected {
+                // Still there: refresh its details (its refs may have moved), keep what is open.
+                Some(i) => {
+                    let sha = self.commits[i].sha.clone();
+                    self.start_detail(sha, true);
+                }
+                None if first && !self.commits.is_empty() => self.select_commit(0),
+                None => self.detail = None,
             }
         }
-        if flags & git::RELOAD_CONFIG != 0 {
-            self.remotes = git::load_remotes(&p);
-            self.submodules = git::load_submodules(&p);
+        if let Some((remotes, subs)) = l.config {
+            self.remotes = remotes;
+            self.submodules = subs;
         }
-        if flags & (git::RELOAD_INDEX | git::RELOAD_IGNORE | git::RELOAD_HEAD | git::RELOAD_STATE) != 0 {
-            self.status = git::load_status(&p);
+        if let Some(s) = l.status {
+            self.status = s;
             self.reload_file_diff();
         }
-        if flags & (git::RELOAD_STATE | git::RELOAD_HEAD | git::RELOAD_INDEX) != 0 {
-            self.state = git::repo_state(&p);
-            self.locked = git::repo_locked(&p);
+        if let Some((state, locked)) = l.state {
+            self.state = state;
+            self.locked = locked;
         }
-        if let Some(g) = &self.git_dir {
-            self.snap = git::snapshot(g);
+        // Only the parts this load read count as seen; a change elsewhere (a commit made while
+        // only the status was read) is still found by the next look.
+        if let Some(s) = l.snap {
+            self.snap = git::merge_snapshot(&self.snap, s, l.covered);
         }
     }
 
-    /// Looks at the watched .git files and reloads the parts that changed.
-    fn poll_changes(&mut self) -> bool {
-        let Some(g) = self.git_dir.clone() else { return false };
-        let now = git::snapshot(&g);
-        let flags = git::changed_flags(&self.snap, &now);
-        if flags != 0 {
-            self.reload(flags);
-            true
-        } else {
-            false
+    /// Looks at the watched .git files and reloads (in the background) the parts that changed.
+    /// While git is still at work (its lock files exist) it waits for the next look.
+    fn poll_changes(&mut self) {
+        // While a load runs it brings its own snapshot (taken when it started); what changes
+        // after that is found at the first look after it. Looking now would see a change the
+        // load already covers and load it a second time.
+        if self.bg_load.busy() {
+            return;
         }
+        let Some((g, common)) = self.git_dirs() else { return };
+        // The banner shows a lock as soon as it is there (only a file check).
+        self.locked = git::repo_locked_at(&g);
+        let busy = git::repo_busy_at(&g, &common);
+        if !busy {
+            self.busy_since = None;
+        }
+        let now = git::snapshot(&g, &common);
+        let flags = git::changed_flags(&self.snap, &now);
+        if flags == 0 {
+            return;
+        }
+        if busy {
+            // Git is still writing: wait for it. A lock that stays was probably left behind
+            // by a git that was stopped; after a few seconds load anyway.
+            let since = *self.busy_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() < std::time::Duration::from_secs(5) {
+                return;
+            }
+        }
+        self.snap = now;
+        self.reload(flags);
     }
 
     fn select_commit(&mut self, i: usize) {
@@ -240,38 +740,229 @@ impl Repo {
         self.selected = Some(i);
         if changed {
             let sha = self.commits[i].sha.clone();
-            self.detail = Some(git::commit_detail(&self.path, &sha));
-            self.detail_file = None;
-            self.detail_diff.clear();
-            self.tree.clear();
-            self.tree_file = None;
-            self.tree_content.clear();
-            if self.detail_tab == DetailTab::Tree {
-                self.tree = git::commit_tree(&self.path, &sha);
-            }
+            self.clear_detail();
+            self.start_detail(sha, false);
         }
     }
 
+    /// Forgets what is shown of the selected commit (another one is about to load).
+    fn clear_detail(&mut self) {
+        self.detail = None;
+        self.detail_file = None;
+        self.detail_diff = Arc::new(Diff::default());
+        self.detail_diff_key = None;
+        self.tree.clear();
+        self.tree_file = None;
+        self.tree_content.clear();
+        self.tree_content_for = None;
+        // Diffs opened in the Commit tab are kept only for the shown commit.
+        self.inline.clear();
+        self.bg_inline.clear();
+    }
+
+    /// Loads a commit's details (and its file tree when that tab is open) in the background.
+    /// `refresh_only`: the same commit again, keep what is shown until the new data is there.
+    /// (A refresh that replaces a newly picked commit's first load still opens its first file.)
+    fn start_detail(&mut self, sha: String, refresh_only: bool) {
+        let path = self.path.clone();
+        let want_tree = self.detail_tab == DetailTab::Tree && self.tree.is_empty();
+        if !refresh_only {
+            self.open_first_file = true;
+        }
+        self.wanted_detail = Some(sha.clone());
+        self.bg_detail.start(move || {
+            let d = git::commit_detail(&path, &sha);
+            let t = if want_tree { Some(git::commit_tree(&path, &sha)) } else { None };
+            (sha, d, t)
+        });
+    }
+
+    /// Loads the diff of the selected local change in the background.
     fn reload_file_diff(&mut self) {
-        self.file_diff.clear();
         if self.sel_file.is_none() && self.view == View::Changes {
             if let Some(f) = self.status.iter().find(|f| f.unstaged()).or_else(|| self.status.first()) {
                 self.sel_file = Some((f.path.clone(), !f.unstaged()));
             }
         }
         if let Some((path, staged)) = self.sel_file.clone() {
-            if let Some(f) = self.status.iter().find(|f| f.path == path) {
+            if let Some(f) = self.status.iter().find(|f| f.path == path).cloned() {
                 if (staged && f.staged()) || (!staged && f.unstaged()) {
-                    self.file_diff = git::working_diff(&self.path, f, staged);
+                    let (dir, opts, tab) = (self.path.clone(), self.diff_opts, self.tab_width);
+                    self.file_req += 1;
+                    let req = self.file_req;
+                    self.bg_file.start(move || {
+                        let o = git::working_diff(&dir, &f, staged, &opts);
+                        let mut d = diffmodel::parse(&o.stdout, tab);
+                        d.lossy = o.lossy;
+                        (path, staged, opts, req, Arc::new(d))
+                    });
                     return;
                 }
             }
             self.sel_file = None;
         }
+        self.file_diff = Arc::new(Diff::default());
+        self.file_diff_key = None;
     }
 
-    fn sha_of(&self, i: usize) -> String {
-        self.commits.get(i).map(|c| c.sha.clone()).unwrap_or_default()
+    /// Loads the diff of one file of the shown commit (Changes tab) in the background.
+    fn load_detail_diff(&mut self, file: String) {
+        let Some(d) = &self.detail else { return };
+        let (dir, sha, parents, orig, opts, tab) = (self.path.clone(), d.sha.clone(), d.parents.clone(), d.renamed_from.get(&file).cloned(), self.diff_opts, self.tab_width);
+        self.detail_file = Some(file.clone());
+        self.bg_ddiff.start(move || {
+            let text = git::commit_file_diff(&dir, &sha, &parents, &file, orig.as_deref(), &opts);
+            (sha, file, opts, Arc::new(diffmodel::parse(&text, tab)))
+        });
+    }
+
+    /// Loads the shown commit's whole file tree (File Tree tab) in the background.
+    fn load_tree(&mut self) {
+        let Some(d) = &self.detail else { return };
+        let (dir, sha) = (self.path.clone(), d.sha.clone());
+        self.bg_tree.start(move || {
+            let t = git::commit_tree(&dir, &sha);
+            (sha, t)
+        });
+    }
+
+    /// Loads one file of the shown commit (File Tree tab) in the background.
+    fn load_tree_file(&mut self, file: String) {
+        let Some(d) = &self.detail else { return };
+        let (dir, sha) = (self.path.clone(), d.sha.clone());
+        self.tree_file = Some(file.clone());
+        self.bg_tree_file.start(move || {
+            let o = git::run(&dir, &["show", &format!("{sha}:{file}")]);
+            let content = if o.stdout.contains('\0') { tr("(binary file)", "(Binärdatei)").into() } else { o.stdout };
+            (sha, file, content)
+        });
+    }
+
+    /// Runs a history search that asks git (`git log` with a path or `-G`) in the background.
+    fn start_search(&mut self, args: Vec<String>) {
+        let (dir, key) = (self.path.clone(), (self.search_mode, self.commit_search.trim().to_string()));
+        self.bg_search.start(move || {
+            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let out = git::run(&dir, &refs).stdout;
+            (key, out.lines().map(|l| l.trim().to_string()).collect())
+        });
+    }
+
+    /// Stops a running history search (its git process too).
+    fn stop_search(&mut self) {
+        self.bg_search.stop();
+    }
+
+    /// Shows the commit a ref (refs/heads/…, refs/remotes/…, refs/tags/…) or a full commit id
+    /// points to. One that the loaded commits' labels name unambiguously needs no git call;
+    /// others are looked up in the background.
+    fn jump(&mut self, name: String) {
+        let full_id = name.len() == 40 && name.bytes().all(|b| b.is_ascii_hexdigit());
+        // The label `git log --decorate` gives it (a branch's short name could also be a
+        // remote-tracking branch's, then git decides).
+        let label = if let Some(t) = name.strip_prefix("refs/tags/") {
+            Some(format!("tag: {t}"))
+        } else if let Some(b) = name.strip_prefix("refs/heads/") {
+            (!self.remote_branches.iter().any(|r| r.name == b)).then(|| b.to_string())
+        } else if let Some(b) = name.strip_prefix("refs/remotes/") {
+            (!self.local.iter().any(|l| l.name == b)).then(|| b.to_string())
+        } else {
+            None
+        };
+        let sha = if full_id {
+            Some(name.clone())
+        } else {
+            label.and_then(|lb| self.commits.iter().find(|c| c.refs.iter().any(|r| *r == lb || r.strip_prefix("HEAD -> ") == Some(lb.as_str()))).map(|c| c.sha.clone()))
+        };
+        if let Some(sha) = sha.filter(|s| self.commits.iter().any(|c| c.sha == *s)) {
+            self.jump_to(&sha);
+            return;
+        }
+        let dir = self.path.clone();
+        self.bg_jump.start(move || git::run(&dir, &["rev-parse", "--verify", "-q", &format!("{name}^{{commit}}")]).stdout.trim().to_string());
+    }
+
+    fn jump_to(&mut self, sha: &str) {
+        if let Some(i) = self.commits.iter().position(|c| c.sha == sha) {
+            self.view = View::Commits;
+            self.select_commit(i);
+            self.scroll_to = Some(i);
+        }
+    }
+
+    /// Reads the status of a tab that wasn't shown yet, for the changes dot in the tab list.
+    fn peek(&mut self) {
+        self.peeked = true;
+        let dir = self.path.clone();
+        self.bg_peek.start(move || git::load_status(&dir));
+    }
+
+    /// The diff of a file opened in the Commit tab, when it is loaded (with the current options).
+    fn inline_diff(&self, sha: &str, file: &str) -> Option<Arc<Diff>> {
+        if self.inline_opts != self.diff_opts || self.inline_tab != self.tab_width {
+            return None;
+        }
+        self.inline.get(&(sha.to_string(), file.to_string())).cloned()
+    }
+
+    /// Starts loading the diff of a file opened in the Commit tab, unless it is there already.
+    /// At most a few load at once ("Expand All" on a big commit would start hundreds of git
+    /// processes otherwise); the others start when the frame after one finishes asks again.
+    fn ensure_inline(&mut self, sha: &str, file: &str) {
+        let tab = self.tab_width;
+        if self.inline_opts != self.diff_opts || self.inline_tab != tab {
+            self.inline.clear();
+            self.bg_inline.clear();
+            self.inline_opts = self.diff_opts;
+            self.inline_tab = tab;
+        }
+        let key = (sha.to_string(), file.to_string());
+        if self.inline.contains_key(&key) || self.bg_inline.iter().any(|(s, f, _)| *s == key.0 && *f == key.1) || self.bg_inline.len() >= 3 {
+            return;
+        }
+        let Some(d) = self.detail.as_ref().filter(|d| d.sha == sha) else { return };
+        let (dir, parents, orig, opts) = (self.path.clone(), d.parents.clone(), d.renamed_from.get(file).cloned(), self.diff_opts);
+        let (s, f) = key.clone();
+        let mut bg = Bg::default();
+        bg.start(move || Arc::new(diffmodel::parse(&git::commit_file_diff(&dir, &s, &parents, &f, orig.as_deref(), &opts), tab)));
+        self.bg_inline.push((key.0, key.1, bg));
+    }
+
+    /// New diff options (diff toolbar): diffs on screen are loaded again with them; a tab in
+    /// the background does that when it is shown next.
+    fn set_diff_opts(&mut self, o: git::DiffOpts, active: bool) {
+        if o == self.diff_opts {
+            return;
+        }
+        self.diff_opts = o;
+        if active {
+            self.reload_diffs();
+        } else {
+            self.diff_stale = true;
+        }
+    }
+
+    fn reload_diffs(&mut self) {
+        self.diff_stale = false;
+        if self.sel_file.is_some() {
+            self.reload_file_diff();
+        }
+        if let Some(f) = self.detail_file.clone() {
+            self.load_detail_diff(f);
+        }
+    }
+
+    /// The repository's tab width changed (Repository Settings): its diffs load again, their
+    /// column counts depend on it. (The Commit tab's diffs check it themselves, `inline_diff`.)
+    fn set_tab_width(&mut self, tab: usize) {
+        let tab = tab.max(1);
+        if tab == self.tab_width {
+            return;
+        }
+        self.tab_width = tab;
+        if self.started {
+            self.reload_diffs();
+        }
     }
 
     /// (ahead, behind, upstream gone) from `%(upstream:track)`.
@@ -343,6 +1034,8 @@ enum Act {
     DetailTab(DetailTab),
     DetailFile(String),
     TreeFile(String),
+    /// A button of the diff toolbar.
+    DiffOpt(diffview::Opt),
     Terminal,
     Explorer(PathBuf),
     QuickLaunch,
@@ -460,6 +1153,8 @@ pub struct App {
     shot_requested: bool,
     shot_done: Arc<AtomicBool>,
     was_focused: bool,
+    /// The repository of the tab that was on screen last frame (see `follow_active_tab`).
+    shown_tab: Option<PathBuf>,
     toast: Option<(String, f64)>,
     pending_open: Vec<(u64, PathBuf)>,
     last_poll: f64,
@@ -529,6 +1224,14 @@ fn state_file() -> Option<PathBuf> {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, repo: Option<PathBuf>, screenshot: Option<PathBuf>) -> Self {
         theme::apply(&cc.egui_ctx);
+        perf::mark_ui_thread();
+        let _ = REPAINT.set(cc.egui_ctx.clone());
+        if let Some(rs) = cc.wgpu_render_state.as_ref() {
+            let i = rs.adapter.get_info();
+            let software = i.device_type == eframe::wgpu::DeviceType::Cpu;
+            let _ = extra::GPU.set((format!("{} ({:?}, {:?})", i.name, i.backend, i.device_type), software));
+            perf::note(&format!("graphics: {} {:?} {:?} driver {} {}", i.name, i.backend, i.device_type, i.driver, i.driver_info));
+        }
         let saved: Saved = state_file()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str(&s).ok())
@@ -558,6 +1261,7 @@ impl App {
             shot_requested: false,
             shot_done: Arc::new(AtomicBool::new(false)),
             was_focused: true,
+            shown_tab: None,
             toast: None,
             pending_open: vec![],
             last_poll: 0.0,
@@ -623,7 +1327,7 @@ impl App {
         theme::set_light(app.p.light);
         theme::apply_visuals(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(app.p.zoom.clamp(0.6, 2.0));
-        extra::set_diff_view(4, app.p.diff_font);
+        extra::set_diff_view(app.p.diff_font);
         app.ws = app.ws.min(app.workspaces.len() - 1);
         let cwd_repo = std::env::current_dir().ok().and_then(|d| git::find_toplevel(&d));
         if let Some(r) = repo.and_then(|r| git::find_toplevel(&r)) {
@@ -631,15 +1335,12 @@ impl App {
         } else if screenshot.is_some() && cwd_repo.is_some() {
             app.add_tab(cwd_repo.unwrap());
         } else {
+            // Tabs load when first shown, in the background (a tab whose folder is no
+            // repository any more says so then); nothing runs before the window appears.
             for t in &saved.tabs {
                 let p = PathBuf::from(t);
-                if p.exists() && git::find_toplevel(&p).is_some() {
-                    let mut r = Repo::open(p.clone());
-                    r.name = app.tab_name(&p);
-                    if app.p.topo {
-                        r.log_opts.topo = true;
-                        r.reload(git::RELOAD_REFS);
-                    }
+                if p.exists() {
+                    let r = app.new_tab(p);
                     app.tabs.push(r);
                 }
             }
@@ -767,14 +1468,92 @@ impl App {
         if let Some(i) = self.tabs.iter().position(|t| t.path == path) {
             self.active = i;
         } else {
-            let mut r = Repo::open(path.clone());
-            r.name = self.tab_name(&path);
-            if self.p.topo {
-                r.log_opts.topo = true;
-                r.reload(git::RELOAD_REFS);
-            }
+            let r = self.new_tab(path);
             self.tabs.push(r);
             self.active = self.tabs.len() - 1;
+        }
+        // It loads at the start of the next frame (`follow_active_tab`).
+        self.save();
+    }
+
+    /// Brings the tab on screen up to date when it changed in any way (switched to, a tab
+    /// closed or moved away, a workspace opened, at start): its repository's diff settings
+    /// apply, and it loads (first time) or catches up with what changed while it was hidden.
+    fn follow_active_tab(&mut self) {
+        // (Also a tab that was never shown under the same path, e.g. after a workspace switch.)
+        let same = self.tabs.get(self.active).map(|t| &t.path) == self.shown_tab.as_ref();
+        if same && self.tabs.get(self.active).is_none_or(|t| t.started) {
+            return;
+        }
+        self.shown_tab = self.tabs.get(self.active).map(|t| t.path.clone());
+        self.apply_repo_view();
+        if let Some(t) = self.tabs.get_mut(self.active) {
+            t.show();
+        }
+    }
+
+    /// Tabs that weren't shown yet get a quick status in the background, one at a time and
+    /// only while the tab on screen isn't loading, so the tab list can mark their changes.
+    fn peek_hidden_tabs(&mut self) {
+        // Only when the dot can be seen (the tab list, with the indicator turned on).
+        if !(self.show_tablist && self.prefs_tab_indicator) {
+            return;
+        }
+        let busy = self.tabs.iter().any(|t| t.bg_peek.busy()) || self.tabs.get(self.active).is_some_and(|t| t.bg_load.busy());
+        if !busy {
+            if let Some(t) = self.tabs.iter_mut().find(|t| !t.started && !t.peeked) {
+                t.peek();
+            }
+        }
+    }
+
+    /// A tab for a repository with the current settings; it loads when first shown.
+    fn new_tab(&self, path: PathBuf) -> Repo {
+        let mut r = Repo::new(path.clone());
+        r.name = self.tab_name(&path);
+        r.log_opts.topo = self.p.topo;
+        r.diff_opts = self.diff_opts();
+        r.tab_width = self.repo_cfg.get(&path.display().to_string()).map(|s| s.tab_width).unwrap_or(4).max(1);
+        // A command still running there (the tab was closed and opened again, or the
+        // workspace switched) keeps the hunk buttons waiting in the new tab too.
+        r.jobs_pending = self.jobs.iter().filter(|j| j.blocks_hunks && j.state() == JobState::Running && j.cwd.as_ref().is_some_and(|c| *c == path || c.starts_with(&path))).map(|j| j.id).collect();
+        if !r.jobs_pending.is_empty() {
+            r.hunk_ok_from = u64::MAX;
+        }
+        r
+    }
+
+    /// The diff options chosen in the diff toolbar.
+    fn diff_opts(&self) -> git::DiffOpts {
+        git::DiffOpts { context: self.p.diff_context, ignore_ws: self.p.diff_ignore_ws, full: self.p.diff_full }
+    }
+
+    /// How diffs are drawn (diff toolbar).
+    fn diff_look(&self) -> diffview::Look {
+        diffview::Look { split: self.p.diff_split, wrap: self.p.diff_wrap, show_ws: self.p.diff_show_ws }
+    }
+
+    /// The diff toolbar's state, for drawing it.
+    fn diff_bar(&self) -> diffview::Bar {
+        diffview::Bar { look: self.diff_look(), opts: self.diff_opts() }
+    }
+
+    /// A diff toolbar button: remember the choice; diffs that need other git options load again.
+    fn diff_opt(&mut self, o: diffview::Opt) {
+        let p = &mut self.p;
+        match o {
+            diffview::Opt::IgnoreWs => p.diff_ignore_ws = !p.diff_ignore_ws,
+            diffview::Opt::ShowWs => p.diff_show_ws = !p.diff_show_ws,
+            diffview::Opt::Wrap => p.diff_wrap = !p.diff_wrap,
+            diffview::Opt::Less => p.diff_context = diffview::less_context(p.diff_context),
+            diffview::Opt::More => p.diff_context = diffview::more_context(p.diff_context),
+            diffview::Opt::Full => p.diff_full = !p.diff_full,
+            diffview::Opt::Split => p.diff_split = !p.diff_split,
+        }
+        let opts = self.diff_opts();
+        let active = self.active;
+        for (i, t) in self.tabs.iter_mut().enumerate() {
+            t.set_diff_opts(opts, i == active);
         }
         self.save();
     }
@@ -905,7 +1684,20 @@ impl App {
         }
         let id = self.next_job;
         self.next_job += 1;
-        self.jobs.push(git::start_job(id, spec, ctx.clone()));
+        // A command that can change the files or the index: the diff on screen won't match
+        // them any more, so the hunk buttons wait until a diff loaded after it is there.
+        let blocks = blocks_hunks(&spec);
+        if blocks {
+            if let Some(c) = &spec.cwd {
+                for t in self.tabs.iter_mut().filter(|t| t.path == *c || c.starts_with(&t.path)) {
+                    t.jobs_pending.push(id);
+                    t.hunk_ok_from = u64::MAX;
+                }
+            }
+        }
+        let mut job = git::start_job(id, spec, ctx.clone());
+        job.blocks_hunks = blocks;
+        self.jobs.push(job);
         if self.jobs.len() > 300 {
             self.jobs.remove(0);
         }
@@ -919,11 +1711,11 @@ impl App {
         self.spawn(JobSpec { title, program: "git".into(), args, display, cwd, stdin: None, env: vec![], changes_repo: true, detached: false, automatic: false }, ctx);
     }
 
-    fn quick_stdin(&mut self, title: String, args: Vec<String>, stdin: String, ctx: &egui::Context) {
-        let Some(r) = self.repo() else { return };
+    fn quick_stdin(&mut self, title: String, args: Vec<String>, stdin: String, ctx: &egui::Context) -> Option<u64> {
+        let r = self.repo()?;
         let display = format!("git {}   {}", args.join(" "), tr("(patch via standard input)", "(Patch über Standardeingabe)"));
         let cwd = Some(r.path.clone());
-        self.spawn(JobSpec { title, program: "git".into(), args, display, cwd, stdin: Some(stdin), env: vec![], changes_repo: true, detached: false, automatic: false }, ctx);
+        Some(self.spawn(JobSpec { title, program: "git".into(), args, display, cwd, stdin: Some(stdin), env: vec![], changes_repo: true, detached: false, automatic: false }, ctx))
     }
 
     fn job(&self, id: u64) -> Option<&Job> {
@@ -934,6 +1726,7 @@ impl App {
         let mut failed: Option<u64> = None;
         let mut refresh: Vec<PathBuf> = vec![];
         let mut open: Vec<PathBuf> = vec![];
+        let mut ended: Vec<u64> = vec![];
         for j in self.jobs.iter_mut() {
             if j.handled {
                 continue;
@@ -942,6 +1735,7 @@ impl App {
                 JobState::Running => {}
                 JobState::Done(code) => {
                     j.handled = true;
+                    ended.push(j.id);
                     if code != 0 {
                         j.expanded = true;
                         if !j.automatic {
@@ -966,6 +1760,21 @@ impl App {
         }
         if failed.is_some() {
             self.notice = failed;
+        }
+        // Commands that changed a repository ended: its hunk buttons wait for a diff loaded
+        // from now on (the one on screen no longer matches the files).
+        for t in self.tabs.iter_mut() {
+            if t.jobs_pending.is_empty() {
+                continue;
+            }
+            t.jobs_pending.retain(|id| !ended.contains(id) && self.jobs.iter().any(|j| j.id == *id));
+            if t.jobs_pending.is_empty() {
+                t.hunk_ok_from = t.file_req + 1;
+                // The diff again right away, not only after the full reload below.
+                if t.started {
+                    t.reload_file_diff();
+                }
+            }
         }
         for p in refresh {
             for t in self.tabs.iter_mut() {
@@ -1066,8 +1875,16 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let t0 = std::time::Instant::now();
         let ctx = ui.ctx().clone();
         self.frames += 1;
+        if perf::enabled() {
+            // The whole previous frame: building it, tessellating and painting.
+            let prev = frame.info().cpu_usage.map(|s| s as f64 * 1000.0).unwrap_or(0.0);
+            if prev > perf::SLOW_FRAME_MS {
+                perf::note(&format!("slow frame (whole, painting included): {prev:.1} ms"));
+            }
+        }
         // The taskbar icon: set again over the first frames (the window may appear late).
         if matches!(self.frames, 2 | 30 | 120) {
             crate::winicon::apply(frame);
@@ -1075,10 +1892,21 @@ impl eframe::App for App {
         self.poll_jobs();
         self.handle_screenshot(&ctx);
 
+        // Take over what background loading has finished (git never runs in this thread for
+        // the views).
+        for t in self.tabs.iter_mut() {
+            t.poll_bg();
+        }
+        self.follow_active_tab();
+        self.peek_hidden_tabs();
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         if focused && !self.was_focused {
-            if let Some(t) = self.tabs.get_mut(self.active) {
-                t.refresh();
+            // Back in the window: files may have changed outside (editor, terminal). Changes in
+            // .git itself are caught by the watch below.
+            if let Some(t) = self.tabs.get_mut(self.active).filter(|t| t.started) {
+                t.reload(git::RELOAD_INDEX);
+                // An editor may have changed just the line ends: Discard Hunk asks again.
+                t.discard_checked = None;
             }
         }
         self.was_focused = focused;
@@ -1086,7 +1914,7 @@ impl eframe::App for App {
         let now = ctx.input(|i| i.time);
         if now - self.last_poll >= POLL_SECONDS {
             self.last_poll = now;
-            if let Some(t) = self.tabs.get_mut(self.active) {
+            if let Some(t) = self.tabs.get_mut(self.active).filter(|t| t.started) {
                 t.poll_changes();
             }
         }
@@ -1210,6 +2038,12 @@ impl eframe::App for App {
         self.setup_window(&ctx);
         self.auto_update_check(&ctx);
         self.apply(acts, &ctx);
+        if perf::enabled() {
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if ms > perf::SLOW_FRAME_MS {
+                perf::note(&format!("slow frame (building the window): {ms:.1} ms"));
+            }
+        }
     }
 }
 
@@ -1269,8 +2103,8 @@ impl App {
                     if let Some(t) = self.tabs.get_mut(self.active) {
                         t.view = v;
                         if v == View::Changes {
-                            t.status = git::load_status(&t.path);
                             t.reload_file_diff();
+                            t.reload(git::RELOAD_INDEX);
                         }
                     }
                 }
@@ -1297,20 +2131,22 @@ impl App {
                     if i < self.tabs.len() {
                         let t = self.tabs.remove(i);
                         self.closed_tabs.push(t.path);
+                        // A tab to the left of the active one: the active one stays active.
+                        if i < self.active {
+                            self.active -= 1;
+                        }
                         if self.active >= self.tabs.len() {
                             self.active = self.tabs.len().saturating_sub(1);
                         }
                         self.save();
                     }
                 }
+                // The tab that becomes active is brought up to date by `follow_active_tab`
+                // at the start of the next frame (also after closing or moving tabs).
                 Act::SwitchTab(i) => {
                     self.manager_active = false;
                     self.commands_view = false;
                     self.active = i;
-                    self.apply_repo_view();
-                    if let Some(t) = self.tabs.get_mut(i) {
-                        t.refresh();
-                    }
                     self.save();
                 }
                 Act::Rebase(base) => self.open_rebase(base),
@@ -1324,39 +2160,29 @@ impl App {
                     if let Some(t) = self.tabs.get_mut(self.active) {
                         t.detail_tab = dt;
                         if dt == DetailTab::Tree && t.tree.is_empty() {
-                            if let Some(i) = t.selected {
-                                let sha = t.sha_of(i);
-                                t.tree = git::commit_tree(&t.path, &sha);
-                            }
+                            t.load_tree();
                         }
                         if dt == DetailTab::Changes && t.detail_file.is_none() {
                             if let Some(f) = t.detail.as_ref().and_then(|d| d.files.first()).map(|f| f.1.clone()) {
-                                let sha = t.detail.as_ref().unwrap().sha.clone();
-                                t.detail_diff = git::commit_file_diff(&t.path, &sha, &f);
-                                t.detail_file = Some(f);
+                                t.load_detail_diff(f);
                             }
                         }
                     }
                 }
                 Act::DetailFile(f) => {
                     if let Some(t) = self.tabs.get_mut(self.active) {
-                        if let Some(d) = &t.detail {
-                            t.detail_diff = git::commit_file_diff(&t.path, &d.sha, &f);
-                            t.detail_file = Some(f);
+                        if t.detail.is_some() {
+                            t.load_detail_diff(f);
                             t.detail_tab = DetailTab::Changes;
                         }
                     }
                 }
                 Act::TreeFile(f) => {
                     if let Some(t) = self.tabs.get_mut(self.active) {
-                        if let Some(d) = &t.detail {
-                            let spec = format!("{}:{}", d.sha, f);
-                            let o = git::run(&t.path, &["show", &spec]);
-                            t.tree_content = if o.stdout.contains('\0') { tr("(binary file)", "(Binärdatei)").into() } else { o.stdout };
-                            t.tree_file = Some(f);
-                        }
+                        t.load_tree_file(f);
                     }
                 }
+                Act::DiffOpt(o) => self.diff_opt(o),
                 Act::Terminal => {
                     if let Some(r) = self.repo() {
                         auth::open_terminal(self.shell, &r.path);
@@ -1366,13 +2192,7 @@ impl App {
                 Act::QuickLaunch => self.quick = Some(String::new()),
                 Act::JumpToRef(name) => {
                     if let Some(t) = self.tabs.get_mut(self.active) {
-                        let o = git::run(&t.path, &["rev-parse", &name]);
-                        let sha = o.stdout.trim().to_string();
-                        if let Some(i) = t.commits.iter().position(|c| c.sha == sha) {
-                            t.view = View::Commits;
-                            t.select_commit(i);
-                            t.scroll_to = Some(i);
-                        }
+                        t.jump(name);
                     }
                 }
                 Act::Copy(s) => ctx.copy_text(s),
@@ -1454,10 +2274,8 @@ impl App {
                         } else if !sha.is_empty() {
                             // Hidden from the list (View > Hide Stashes): show its details anyway.
                             t.selected = None;
-                            t.detail = Some(git::commit_detail(&t.path, &sha));
-                            t.detail_file = None;
-                            t.detail_diff.clear();
-                            t.tree.clear();
+                            t.clear_detail();
+                            t.start_detail(sha, false);
                         }
                         if t.detail_tab == DetailTab::Tree {
                             t.detail_tab = DetailTab::Commit;
@@ -1524,7 +2342,6 @@ impl App {
                     if n > 0 {
                         self.manager_active = false;
                         self.active = ((self.active as i32 + d).rem_euclid(n)) as usize;
-                        self.apply_repo_view();
                     }
                 }
                 Act::Theme(light) => {
@@ -1599,6 +2416,10 @@ impl App {
                         if !self.workspaces[wi].tabs.contains(&ps) {
                             self.workspaces[wi].tabs.push(ps);
                         }
+                        // A tab to the left of the active one: the active one stays active.
+                        if i < self.active {
+                            self.active -= 1;
+                        }
                         self.active = self.active.min(self.tabs.len().saturating_sub(1));
                         self.save();
                     }
@@ -1624,5 +2445,41 @@ impl App {
                 }
             }
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(args: &[&str], detached: bool, automatic: bool) -> JobSpec {
+        JobSpec {
+            title: String::new(),
+            program: "git".into(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            display: String::new(),
+            cwd: None,
+            stdin: None,
+            env: vec![],
+            changes_repo: true,
+            detached,
+            automatic,
+        }
+    }
+
+    #[test]
+    fn which_commands_make_hunk_buttons_wait() {
+        assert!(blocks_hunks(&spec(&["add", "--", "a.txt"], false, false)));
+        assert!(blocks_hunks(&spec(&["apply", "--cached", "-"], false, false)));
+        assert!(blocks_hunks(&spec(&["-c", "alias.yagui-seq=!git commit && git push", "yagui-seq"], false, false)));
+        assert!(!blocks_hunks(&spec(&["push", "origin"], false, false)));
+        assert!(!blocks_hunks(&spec(&["-c", "credential.helper=", "fetch", "--all"], false, false)));
+        // A merge tool runs on its own (its end isn't known), the automatic fetch neither.
+        assert!(!blocks_hunks(&spec(&["mergetool"], true, false)));
+        assert!(!blocks_hunks(&spec(&["fetch"], false, true)));
+        // Subcommands of tools: only those that update the work tree.
+        assert!(!blocks_hunks(&spec(&["lfs", "push", "origin"], false, false)));
+        assert!(blocks_hunks(&spec(&["lfs", "pull"], false, false)));
+        assert!(!blocks_hunks(&spec(&["svn", "fetch"], false, false)));
+        assert!(blocks_hunks(&spec(&["svn", "rebase"], false, false)));
     }
 }

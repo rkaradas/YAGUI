@@ -6,7 +6,10 @@ available as a button or dialog, and YAGUI always shows which command it runs an
 ## Features
 
 - History with branch graph, commit details with inline diffs, file tree
-- Local changes as a folder tree: stage, unstage, stash, discard or commit whole folders
+- Local changes as a folder tree: stage, unstage, stash, discard or commit whole folders;
+  stage, unstage or discard single hunks
+- Diffs in one column or side by side, with a toolbar for ignoring whitespace, showing
+  invisible characters, word wrap, more or fewer lines around each change and the entire file
 - All Git commands in a searchable, explained command view and in Quick Launch (Ctrl+P)
 - Repository Manager, workspaces, tab list, statistics and treemap
 - Branch, tag, stash, remote, rebase (interactive), cherry-pick, bisect, worktrees, submodules,
@@ -27,13 +30,16 @@ Download the file for your computer from the
 | Debian/Ubuntu | `yagui_<version>_amd64.deb` | `sudo apt install ./yagui_<version>_amd64.deb` |
 | Other Linux | `yagui-<version>-linux-x64.tar.gz` | Unpack, then `./yagui --install` (adds a menu entry and the `yagui` command). |
 
-Git must be installed. Command line options: `yagui --help`.
+Git must be installed. On Linux YAGUI needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and
+newer). Command line options: `yagui --help`.
 
 ## Updates
 
 YAGUI looks for a new release once a day (Help > Check for Updates; can be turned off there).
 "Download and install" replaces the program and restarts it. For a private repository, sign in
-to GitHub under File > Accounts so YAGUI may read the releases.
+to GitHub under File > Accounts so YAGUI may read the releases. Installed from the .deb (or in a
+folder you may not write to), YAGUI points to the release page instead: install the new package
+from there.
 
 ## Versions and releases
 
@@ -58,6 +64,14 @@ cargo build --release
 ```
 
 The program is `target/release/yagui` (`yagui.exe` on Windows). Git must be installed and on the
-PATH. On Linux the GTK 3 development files are needed (`libgtk-3-dev`).
+PATH. On Linux a C toolchain is enough (Debian/Ubuntu: `build-essential`): the graphics, font
+and window system libraries are loaded at runtime, and file dialogs go through the desktop
+portal (xdg-desktop-portal).
 
 `yagui --screenshot shot.png [--repo <folder>]` writes a picture of the window and exits.
+
+If YAGUI stutters on a computer, start it with the environment variable
+`YAGUI_PERF_LOG=<file>`: it then writes how long each Git call, each command and each slow
+frame took, and which graphics adapter draws the window (Help > About shows it too). When
+drawing is the slow part, another graphics interface may help: on Windows `WGPU_BACKEND=dx12`,
+`vulkan` or `gl`, on Linux `vulkan` or `gl` (macOS has only Metal; don't set it there).

@@ -148,7 +148,9 @@ pub fn install(o: &Options) -> Result<PathBuf, String> {
         }
         if o.register {
             let size_kb = std::fs::metadata(&target).map(|m| m.len() / 1024).unwrap_or(0).to_string();
-            let uninst = format!("\"{t}\" --uninstall");
+            // With the folder, so uninstalling removes this installation, wherever it is.
+            let dir_arg = o.dir.display().to_string().trim_end_matches(['\\', '/']).to_string();
+            let uninst = format!("\"{t}\" --uninstall --dir \"{dir_arg}\"");
             let dir = o.dir.display().to_string();
             for (name, kind, val) in [
                 ("DisplayName", "REG_SZ", "YAGUI"),
@@ -194,28 +196,50 @@ pub fn install(o: &Options) -> Result<PathBuf, String> {
     Ok(target)
 }
 
+/// What `uninstall` removes besides the program folder.
+#[derive(Clone)]
+pub struct UninstallOptions {
+    /// The YAGUI settings folder.
+    pub remove_settings: bool,
+    /// The Explorer entries and the Apps entry (Windows) – off for `--no-register`.
+    pub register: bool,
+    /// Start menu and desktop shortcut (Windows); `~/.local/bin/yagui`, menu entry and icon
+    /// (Linux). These live in the user's own folders, not in the program folder – off only for
+    /// tests, which must not remove the shortcuts of a real installation.
+    pub shortcuts: bool,
+}
+
+impl Default for UninstallOptions {
+    fn default() -> Self {
+        UninstallOptions { remove_settings: false, register: true, shortcuts: true }
+    }
+}
+
 /// Removes shortcuts, Explorer entries, the Apps entry and (optionally) the settings, then the
 /// program folder (after this program has exited).
-pub fn uninstall(dir: &Path, remove_settings: bool, register: bool) -> Result<(), String> {
+pub fn uninstall(dir: &Path, o: &UninstallOptions) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let _ = std::fs::remove_file(start_menu_lnk());
-        let _ = std::fs::remove_file(desktop_lnk());
-        if register {
+        if o.shortcuts {
+            let _ = std::fs::remove_file(start_menu_lnk());
+            let _ = std::fs::remove_file(desktop_lnk());
+        }
+        if o.register {
             let _ = run_hidden("reg", &["delete", r"HKCU\Software\Classes\Directory\shell\YAGUI", "/f"]);
             let _ = run_hidden("reg", &["delete", r"HKCU\Software\Classes\Directory\Background\shell\YAGUI", "/f"]);
             let _ = run_hidden("reg", &["delete", UNINSTALL_KEY, "/f"]);
         }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
-    {
+    if o.shortcuts {
         let home = env_dir("HOME").unwrap_or_default();
         let _ = std::fs::remove_file(home.join(".local/bin/yagui"));
         let _ = std::fs::remove_file(home.join(".local/share/applications/yagui.desktop"));
         let _ = std::fs::remove_file(home.join(".local/share/icons/hicolor/256x256/apps/yagui.png"));
     }
-    let _ = register;
-    if remove_settings {
+    // Only used on some systems.
+    let _ = (o.register, o.shortcuts);
+    if o.remove_settings {
         if let Some(base) = env_dir("APPDATA").or_else(|| env_dir("HOME").map(|h| h.join(".config"))) {
             let _ = std::fs::remove_dir_all(base.join("YAGUI"));
         }
@@ -223,38 +247,75 @@ pub fn uninstall(dir: &Path, remove_settings: bool, register: bool) -> Result<()
     if cfg!(target_os = "macos") {
         return Ok(());
     }
-    // The running program can't delete its own folder: remove it shortly after exit.
-    let me = std::env::current_exe().ok();
-    let inside = me.as_ref().map(|m| m.starts_with(dir)).unwrap_or(false);
-    if inside {
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            let script = format!("ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"{}\"", dir.display());
-            let _ = Command::new("cmd").args(["/c", &script]).creation_flags(0x0800_0000).spawn();
-        }
-        #[cfg(unix)]
-        {
-            let script = format!("sleep 2; rm -rf '{}'", dir.display().to_string().replace('\'', "'\\''"));
-            let _ = Command::new("sh").args(["-c", &script]).spawn();
-        }
-    } else {
-        let _ = std::fs::remove_dir_all(dir);
+    // Only YAGUI's own files go, and the folder only if nothing else is left in it: `--dir` may
+    // point at a folder shared with other programs.
+    let exe = installed_exe(dir);
+    let mut old = exe.as_os_str().to_owned();
+    old.push(".old");
+    let old = PathBuf::from(old);
+    let _ = std::fs::remove_file(&old);
+    // Is the running program the one to remove? (canonical paths: on Windows the spelling of
+    // `--dir` may differ in case from the real path)
+    let me = std::env::current_exe().ok().and_then(|m| m.canonicalize().ok());
+    let running = me.is_some() && me == exe.canonicalize().ok();
+    #[cfg(windows)]
+    if running {
+        // A running program can't delete itself on Windows: a hidden PowerShell waits until
+        // this process has ended, then removes the program and the then empty folder. It runs
+        // from the temp folder, so it does not keep the program folder open itself.
+        use std::os::windows::process::CommandExt;
+        let q = |p: &Path| p.display().to_string().replace('\'', "''");
+        let ps = format!(
+            "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '{exe}','{old}' -Force -ErrorAction SilentlyContinue; if (-not (Get-ChildItem -LiteralPath '{d}' -Force -ErrorAction SilentlyContinue)) {{ Remove-Item -LiteralPath '{d}' -ErrorAction SilentlyContinue }}",
+            pid = std::process::id(),
+            exe = q(&exe),
+            old = q(&old),
+            d = q(dir),
+        );
+        let _ = Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &ps]).current_dir(std::env::temp_dir()).creation_flags(0x0800_0000).spawn();
+        return Ok(());
     }
+    // Elsewhere (and on Unix even while running) the files can go right away.
+    let _ = running;
+    let _ = std::fs::remove_file(&exe);
+    let _ = std::fs::remove_dir(dir);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    // (All tests here are left out on macOS, where install() always refuses.)
+    #[cfg_attr(target_os = "macos", allow(unused_imports))]
     use super::*;
 
+    /// No registry and no shortcuts: those belong to a real installation, not to the test folder.
+    #[cfg(not(target_os = "macos"))]
+    const ONLY_FILES: UninstallOptions = UninstallOptions { remove_settings: false, register: false, shortcuts: false };
+
+    // On macOS install() always refuses (the .app is dragged to Applications instead).
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn install_and_uninstall_into_a_folder() {
         let dir = std::env::temp_dir().join(format!("yagui-install-test-{}", std::process::id()));
         let o = Options { dir: dir.clone(), start_menu: false, desktop: false, context_menu: false, register: false };
         let exe = install(&o).unwrap();
         assert!(exe.exists());
-        uninstall(&dir, false, false).unwrap();
+        uninstall(&dir, &ONLY_FILES).unwrap();
         assert!(!dir.exists());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn uninstall_leaves_other_files_in_a_shared_folder() {
+        let dir = std::env::temp_dir().join(format!("yagui-shared-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let other = dir.join("other-tool.txt");
+        std::fs::write(&other, b"not YAGUI's").unwrap();
+        let o = Options { dir: dir.clone(), start_menu: false, desktop: false, context_menu: false, register: false };
+        let exe = install(&o).unwrap();
+        uninstall(&dir, &ONLY_FILES).unwrap();
+        assert!(!exe.exists());
+        assert!(other.exists() && dir.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

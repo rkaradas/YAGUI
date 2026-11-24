@@ -426,12 +426,15 @@ impl App {
 
     pub(super) fn poll_manager(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.mgr.scan_rx {
-            if let Ok(found) = rx.try_recv() {
-                self.known_repos = found;
-                self.mgr.scan_rx = None;
-                self.save();
-            } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            match rx.try_recv() {
+                Ok(found) => {
+                    self.known_repos = found;
+                    self.mgr.scan_rx = None;
+                    self.save();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
+                // The scan ended without an answer: stop waking the window up for it.
+                Err(_) => self.mgr.scan_rx = None,
             }
         }
         if let Some(rx) = &self.mgr.info_rx {
@@ -1108,15 +1111,19 @@ impl App {
         self.ws = i;
         self.tabs.clear();
         let w = self.workspaces[i].clone();
+        // Tabs load in the background when first shown (a folder that is no repository any
+        // more says so in its tab).
         for t in &w.tabs {
             let p = PathBuf::from(t);
-            if p.exists() && git::find_toplevel(&p).is_some() {
-                let mut r = super::Repo::open(p.clone());
-                r.name = self.tab_name(&p);
+            if p.exists() {
+                let r = self.new_tab(p);
                 self.tabs.push(r);
             }
         }
+        // The active tab loads at the start of the next frame (`follow_active_tab`), even when
+        // the other workspace showed the same repository.
         self.active = w.active.min(self.tabs.len().saturating_sub(1));
+        self.shown_tab = None;
         self.update_title(ctx);
         self.save();
     }

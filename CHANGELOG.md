@@ -3,6 +3,35 @@
 All notable changes to YAGUI. Versions follow [Semantic Versioning](https://semver.org/):
 MAJOR.MINOR.PATCH. The release workflow takes the notes for a version from this file.
 
+## [Unreleased]
+
+### Added
+- Side-by-side diff: old lines on the left, new lines on the right, gaps hatched
+- Diff toolbar at the top right of every diff (left to right): ignore whitespace, show invisible characters (· space, → tab, ¶ Windows line end), word wrap (in the single-column view), fewer and more lines around each change, the entire file, side by side. The choices are remembered
+- "Reading repository…" in the status bar while a big repository is being read
+
+### Changed
+- Much smoother on slow computers: Git now runs in the background for the history, the local changes, commit details, diffs, path/content searches and jumping to a branch or tag, so the window no longer stops while it waits. Reading no longer rewrites Git's index, which used to make the folder watch reload again and again even when nothing was done. Tabs load when they are first shown; a replaced load stops its Git process
+- Long diffs and very long lines stay fast: only the visible part is drawn
+- Diffs of files opened with "Expand All" load a few at a time instead of all at once
+- The local changes show what is really in the files: no text conversion (for example of PDF or Office files), so staging a hunk never writes converted text
+- `YAGUI_PERF_LOG=<file>` writes a timing log (Git calls, commands, slow frames, graphics adapter) to track down stutter; Help > About shows the graphics adapter and warns when the computer draws without graphics acceleration
+
+### Fixed
+- Running the tests (`cargo test`) no longer removes the Start menu and desktop shortcuts (Linux: menu entry, icon and `yagui` command) of an installed YAGUI
+- Update check for a private repository without a GitHub sign-in: it now says that GitHub gives no access (and to sign in under File > Accounts) instead of "No release has been published yet"
+- Updates when YAGUI was installed from the .deb or sits in a folder you may not write to: the update dialog points to the release page instead of failing with "Permission denied"
+- Staging a hunk of a file that isn't UTF-8 (for example Windows-1252 with umlauts) could replace its special characters with "�" in the commit; such hunks are no longer offered (stage the whole file)
+- Discard Hunk could rewrite all line endings of a file whose line endings don't match core.autocrlf or .gitattributes (for example mixed CRLF and LF); it is no longer offered for such files
+- A user's `apply.whitespace=fix` no longer changes the spaces of a staged or discarded hunk
+- Hunk buttons wait while a command changes the repository, so a quick second click can't apply a hunk twice or in the wrong place
+- Discard Hunk on a submodule's commit change did nothing; hunk buttons are no longer shown there
+- Cancelling a command in the Activity window now stops it completely on Windows (Git for Windows' `git` starts the real git, which kept running)
+- A renamed file added with "intent to add" (`git add -N`) showed up as a stray extra entry, or closed YAGUI when the old name had an umlaut
+- Clicking an annotated tag in the sidebar now jumps to its commit; a tag and a branch with the same name are told apart
+- The diff of a file whose name contains `[`, `]`, `*` or `?` no longer brings in other files that the name matches as a pattern
+- Closing or moving a tab to the left of the active one no longer switches to another tab
+
 ## [1.0.0] - 2026-11-21
 
 First release of YAGUI – Yet Another Git User Interface.

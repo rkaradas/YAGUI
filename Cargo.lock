@@ -4372,6 +4372,8 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "unicode-segmentation",
+ "unicode-width",
  "windows-sys 0.61.2",
 ]
 

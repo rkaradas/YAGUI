@@ -8,11 +8,15 @@
 //!   Windows, `yagui-<version>-<platform>.tar.gz` (holding the `yagui` program) elsewhere.
 //! - Installing replaces the running program: it is renamed to `*.old` (allowed while it runs),
 //!   the new one takes its place, YAGUI restarts and removes the old file on the next start.
+//!   That needs a program folder this user may write to; a package (`/usr/bin/yagui` from the
+//!   .deb) or a read-only folder gets the release page instead (`self_update_blocker`).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
+use crate::i18n::trs;
 use crate::version;
 
 #[derive(Clone, Debug)]
@@ -76,7 +80,13 @@ fn curl(url: &str, accept: &str, out_file: Option<&Path>) -> Result<(u32, Vec<u8
     }
     c.arg(url).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     no_window(&mut c);
-    let mut child = c.spawn().map_err(|e| format!("curl: {e}"))?;
+    let mut child = c.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            trs("curl is not installed (Debian/Ubuntu: sudo apt install curl)".into(), "curl ist nicht installiert (Debian/Ubuntu: sudo apt install curl)".into())
+        } else {
+            format!("curl: {e}")
+        }
+    })?;
     if let Some(mut si) = child.stdin.take() {
         if let Some(t) = &token {
             let _ = si.write_all(format!("Authorization: Bearer {t}\n").as_bytes());
@@ -94,17 +104,64 @@ fn curl(url: &str, accept: &str, out_file: Option<&Path>) -> Result<(u32, Vec<u8
     Ok((code, body))
 }
 
-/// The newest published release, or None when there is none (or none can be seen).
-pub fn latest() -> Result<Option<Release>, String> {
+/// Why an update check failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckErr {
+    /// GitHub does not show the repository: it is private and there is no (matching) sign-in.
+    NoAccess(u32),
+    /// GitHub refused the sign-in stored in Git (expired or revoked).
+    BadSignIn,
+    /// Too many requests or not allowed (403/429).
+    Refused(u32),
+    /// Anything else: network, curl missing, an unexpected answer.
+    Other(String),
+}
+
+impl CheckErr {
+    pub fn text(&self) -> String {
+        match self {
+            CheckErr::NoAccess(c) => trs(
+                format!("no access to github.com/{} (GitHub answered {c})", version::REPO),
+                format!("kein Zugriff auf github.com/{} (GitHub antwortete {c})", version::REPO),
+            ),
+            CheckErr::BadSignIn => trs("GitHub refused the sign-in stored in Git (expired or revoked)".into(), "GitHub lehnt die in Git gespeicherte Anmeldung ab (abgelaufen oder widerrufen)".into()),
+            CheckErr::Refused(c) => trs(
+                format!("GitHub refused the request ({c}): too many requests, or not allowed – try again later"),
+                format!("GitHub lehnte die Anfrage ab ({c}): zu viele Anfragen oder nicht erlaubt – später erneut versuchen"),
+            ),
+            CheckErr::Other(s) => s.clone(),
+        }
+    }
+
+    /// Signing in to GitHub (File > Accounts) would help.
+    pub fn sign_in_helps(&self) -> bool {
+        matches!(self, CheckErr::NoAccess(_) | CheckErr::BadSignIn)
+    }
+}
+
+impl std::fmt::Display for CheckErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text())
+    }
+}
+
+/// The newest published release, or None when there is none.
+pub fn latest() -> Result<Option<Release>, CheckErr> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", version::REPO);
-    let (code, body) = curl(&url, "application/vnd.github+json", None)?;
-    if code == 404 {
-        return Ok(None);
+    let (code, body) = curl(&url, "application/vnd.github+json", None).map_err(CheckErr::Other)?;
+    match code {
+        200 => {}
+        404 => {
+            // No published release, or no access: for a private repository without a
+            // (matching) GitHub sign-in GitHub answers 404 too. The repository tells them apart.
+            let (repo_code, _) = curl(&format!("https://api.github.com/repos/{}", version::REPO), "application/vnd.github+json", None).map_err(CheckErr::Other)?;
+            return no_release_or_no_access(repo_code);
+        }
+        401 => return Err(CheckErr::BadSignIn),
+        403 | 429 => return Err(CheckErr::Refused(code)),
+        c => return Err(CheckErr::Other(trs(format!("GitHub answered {c}"), format!("GitHub antwortete {c}")))),
     }
-    if code != 200 {
-        return Err(format!("GitHub answered {code}"));
-    }
-    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| CheckErr::Other(e.to_string()))?;
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
     let assets = v
         .get("assets")
@@ -120,6 +177,62 @@ pub fn latest() -> Result<Option<Release>, String> {
         })
         .unwrap_or_default();
     Ok(Some(Release { tag: s("tag_name"), name: s("name"), notes: s("body"), url: s("html_url"), published: s("published_at").chars().take(10).collect(), assets }))
+}
+
+/// releases/latest answered 404: with the repository visible there is no release yet,
+/// otherwise this user cannot see the (private) repository.
+fn no_release_or_no_access(repo_code: u32) -> Result<Option<Release>, CheckErr> {
+    match repo_code {
+        200 => Ok(None),
+        401 => Err(CheckErr::BadSignIn),
+        403 | 429 => Err(CheckErr::Refused(repo_code)),
+        c => Err(CheckErr::NoAccess(c)),
+    }
+}
+
+/// Why the running program cannot replace itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Blocker {
+    /// Installed by the package manager (the .deb, under /usr): update the package instead.
+    Package(String),
+    /// This user may not replace the program file: the reason (path and error).
+    NoWrite(String),
+}
+
+/// Whether the running program cannot replace itself (worked out once).
+pub fn self_update_blocker() -> Option<Blocker> {
+    static BLOCKER: OnceLock<Option<Blocker>> = OnceLock::new();
+    BLOCKER.get_or_init(|| std::env::current_exe().ok().and_then(|exe| blocker_for(&exe))).clone()
+}
+
+/// A program under /usr (not /usr/local) on Linux belongs to the package manager. Otherwise
+/// its folder must take a new file (tried with a short-lived probe file), and on Windows the
+/// program itself must be renamable: exe -> exe.old needs DELETE on it or "delete subfolders
+/// and files" on the folder, which e.g. a C:\ProgramData folder made by an administrator does
+/// not give normal users.
+fn blocker_for(exe: &Path) -> Option<Blocker> {
+    if cfg!(target_os = "linux") && exe.starts_with("/usr") && !exe.starts_with("/usr/local") {
+        return Some(Blocker::Package(exe.display().to_string()));
+    }
+    let dir = exe.parent()?;
+    let probe = dir.join(format!(".yagui-update-probe-{}", std::process::id()));
+    if let Err(e) = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        return Some(Blocker::NoWrite(format!("{}: {e}", dir.display())));
+    }
+    let _ = std::fs::remove_file(&probe);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const DELETE: u32 = 0x0001_0000;
+        if let Err(e) = std::fs::OpenOptions::new().access_mode(DELETE).share_mode(7).open(exe) {
+            // Only a refusal counts: a passing lock by another program (os error 32) would
+            // otherwise stay cached for the whole session.
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                return Some(Blocker::NoWrite(format!("{}: {e}", exe.display())));
+            }
+        }
+    }
+    None
 }
 
 /// Downloads a release file into the temp folder.
@@ -199,5 +312,54 @@ pub fn restart() {
     if let Ok(exe) = std::env::current_exe() {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let _ = Command::new(exe).args(args).spawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_404_means_no_release_only_when_the_repository_is_visible() {
+        assert!(matches!(no_release_or_no_access(200), Ok(None)));
+        let e = no_release_or_no_access(404).unwrap_err();
+        assert_eq!(e, CheckErr::NoAccess(404));
+        assert!(e.sign_in_helps());
+        assert!(!CheckErr::Refused(429).sign_in_helps());
+    }
+
+    #[test]
+    fn self_update_needs_a_program_folder_that_takes_new_files() {
+        let dir = std::env::temp_dir().join(format!("yagui-blocker-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("yagui");
+        std::fs::write(&exe, b"").unwrap();
+        assert_eq!(blocker_for(&exe), None);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the probe file is removed again");
+        assert!(matches!(blocker_for(&dir.join("missing").join("yagui")), Some(Blocker::NoWrite(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+        #[cfg(target_os = "linux")]
+        {
+            assert!(matches!(blocker_for(Path::new("/usr/bin/yagui")), Some(Blocker::Package(_))));
+            assert!(!matches!(blocker_for(Path::new("/usr/local/bin/yagui")), Some(Blocker::Package(_))));
+        }
+    }
+
+    /// A program the user may not rename (only DELETE is denied, creating files is allowed).
+    #[cfg(windows)]
+    #[test]
+    fn a_program_that_may_not_be_renamed_is_blocked() {
+        let dir = std::env::temp_dir().join(format!("yagui-blocker-acl-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("yagui.exe");
+        std::fs::write(&exe, b"").unwrap();
+        let icacls = |p: &Path, a: &[&str]| std::process::Command::new("icacls").arg(p).args(a).output().map(|o| o.status.success()).unwrap_or(false);
+        // BUILTIN\Users: no "delete child" on the folder, no "delete" on the file.
+        let denied = icacls(&dir, &["/deny", "*S-1-5-32-545:(DC)"]) && icacls(&exe, &["/deny", "*S-1-5-32-545:(DE)"]);
+        let b = blocker_for(&exe);
+        icacls(&exe, &["/remove:d", "*S-1-5-32-545"]);
+        icacls(&dir, &["/remove:d", "*S-1-5-32-545"]);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(denied && matches!(b, Some(Blocker::NoWrite(_))), "{b:?}");
     }
 }

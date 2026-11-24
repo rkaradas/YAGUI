@@ -106,10 +106,31 @@ pub struct Prefs {
     pub auto_update: bool,
     #[serde(default)]
     pub last_update_check: u64,
+    // The diff toolbar.
+    /// Unchanged lines shown around each change.
+    #[serde(default = "three")]
+    pub diff_context: u32,
+    #[serde(default)]
+    pub diff_ignore_ws: bool,
+    /// Spaces as ·, tabs as →, Windows line ends (CR) as ¶.
+    #[serde(default)]
+    pub diff_show_ws: bool,
+    /// Wrap long lines (only in the unified view).
+    #[serde(default)]
+    pub diff_wrap: bool,
+    /// The whole file instead of hunks.
+    #[serde(default)]
+    pub diff_full: bool,
+    /// Side by side: old lines left, new lines right.
+    #[serde(default)]
+    pub diff_split: bool,
 }
 
 fn one() -> f32 {
     1.0
+}
+fn three() -> u32 {
+    3
 }
 fn diff_font() -> f32 {
     12.5
@@ -139,18 +160,14 @@ impl Default for Prefs {
     }
 }
 
-/// Tab width used when drawing diffs (Settings for This Repository > Diff View).
-static TAB_WIDTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(4);
+/// Font size of diffs (Preferences). The tab width (Settings for This Repository > Diff View)
+/// belongs to each tab: `Repo::tab_width`, used when its diffs are loaded.
 static DIFF_FONT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(125);
 
-pub fn tab_width() -> usize {
-    TAB_WIDTH.load(std::sync::atomic::Ordering::Relaxed)
-}
 pub fn diff_font_size() -> f32 {
     DIFF_FONT.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10.0
 }
-pub fn set_diff_view(tab: usize, font: f32) {
-    TAB_WIDTH.store(tab.clamp(1, 16), std::sync::atomic::Ordering::Relaxed);
+pub fn set_diff_view(font: f32) {
     DIFF_FONT.store((font.clamp(8.0, 24.0) * 10.0) as u32, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -810,6 +827,9 @@ impl App {
                 cfg(&["config", "--local", "commit.template", d.template.trim()]);
             }
             self.repo_cfg.insert(p.display().to_string(), d.s.clone());
+            if let Some(t) = self.tabs.iter_mut().find(|t| t.path == p) {
+                t.set_tab_width(d.s.tab_width);
+            }
             self.apply_repo_view();
             self.toast = Some((tr("Repository settings saved.", "Repository-Einstellungen gespeichert.").into(), ctx.input(|i| i.time)));
             self.save();
@@ -820,9 +840,10 @@ impl App {
         }
     }
 
-    /// Applies the active repository's diff settings.
+    /// Applies the diff font size (each tab keeps its repository's tab width for loading its
+    /// diffs, see `Repo::set_tab_width`).
     pub(super) fn apply_repo_view(&self) {
-        set_diff_view(self.repo_settings().tab_width, self.p.diff_font);
+        set_diff_view(self.p.diff_font);
     }
 
     // ------------------------------------------------------------------ custom commands
@@ -917,17 +938,36 @@ impl App {
         }
         let mut open = true;
         let mut open_updates = false;
-        let git = crate::git::run(std::path::Path::new("."), &["--version"]).stdout;
+        // Asked once, not in every frame (each git start costs tens of milliseconds).
+        static GIT_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let git = GIT_VERSION.get_or_init(|| crate::git::run(std::path::Path::new("."), &["--version"]).stdout.trim().to_string());
         egui::Window::new(tr("About YAGUI", "Über YAGUI")).id(Id::unique("about")).open(&mut open).collapsible(false).resizable(false).pivot(Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                let tex = ui.ctx().load_texture("about_icon", egui::ColorImage::from_rgba_unmultiplied([96, 96], &crate::appicon::icon_pixels(96)), egui::TextureOptions::LINEAR);
+                let tex_id = Id::unique("about_icon_tex");
+                let tex = match ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(tex_id)) {
+                    Some(t) => t,
+                    None => {
+                        let t = ui.ctx().load_texture("about_icon", egui::ColorImage::from_rgba_unmultiplied([96, 96], &crate::appicon::icon_pixels(96)), egui::TextureOptions::LINEAR);
+                        ui.ctx().data_mut(|d| d.insert_temp(tex_id, t.clone()));
+                        t
+                    }
+                };
                 ui.image((tex.id(), Vec2::splat(72.0)));
                 ui.label(RichText::new("YAGUI").font(FontId::new(22.0, theme::semibold())));
                 ui.label(RichText::new("Yet Another Git User Interface").size(13.0).color(theme::TEXT_DIM()));
                 ui.label(RichText::new(format!("{} {}", tr("Version", "Version"), crate::version::VERSION)).color(theme::TEXT_DIM()));
                 ui.label(RichText::new(format!("{} {} · {} · {}", tr("Commit", "Commit"), crate::version::COMMIT, crate::version::COMMIT_DATE, crate::version::platform())).size(11.5).color(theme::TEXT_FAINT()));
                 ui.label(RichText::new(tr("A friendly Git client that shows every command it runs.", "Ein freundlicher Git-Client, der jeden ausgeführten Befehl zeigt.")).size(12.5));
-                ui.label(RichText::new(git.trim()).size(11.5).color(theme::TEXT_FAINT()));
+                ui.label(RichText::new(git.as_str()).size(11.5).color(theme::TEXT_FAINT()));
+                if let Some((gpu, software)) = GPU.get() {
+                    ui.label(RichText::new(trs(format!("Graphics: {gpu}"), format!("Grafik: {gpu}"))).size(11.5).color(theme::TEXT_FAINT()));
+                    if *software {
+                        ui.label(RichText::new(tr(
+                            "Drawn in software (no suitable graphics driver): YAGUI may feel slow. Installing the graphics driver of the computer's maker helps.",
+                            "Wird per Software gezeichnet (kein passender Grafiktreiber): YAGUI kann träge wirken. Der Grafiktreiber des Herstellers hilft.",
+                        )).size(11.5).color(theme::ORANGE()));
+                    }
+                }
                 ui.add_space(6.0);
                 if ui.link(RichText::new(REPO_URL).size(12.0)).on_hover_text(tr("Source code on GitHub", "Quellcode auf GitHub")).clicked() {
                     super::auth::open_url(REPO_URL);
@@ -948,6 +988,10 @@ impl App {
 
 /// Where YAGUI's source code lives.
 pub const REPO_URL: &str = "https://github.com/rkaradas/YAGUI";
+
+/// The graphics adapter the window is drawn with ("name (backend, kind)") and whether it is a
+/// software renderer (WARP/llvmpipe: every frame then costs CPU time). Set once at start.
+pub static GPU: std::sync::OnceLock<(String, bool)> = std::sync::OnceLock::new();
 
 pub const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Ctrl+T", "New tab (Repository Manager)", "Neuer Tab (Repository Manager)"),

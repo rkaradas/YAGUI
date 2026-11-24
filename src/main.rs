@@ -34,8 +34,8 @@ Usage: yagui [folder] [options]
   --check-update               ask GitHub for the newest release
   --install [--dir <folder>] [--quiet] [--desktop] [--no-shortcuts] [--no-register]
                                install for the current user (--quiet: without a window)
-  --uninstall [--quiet] [--remove-settings]
-                               remove YAGUI again
+  --uninstall [--dir <folder>] [--quiet] [--remove-settings] [--no-shortcuts] [--no-register]
+                               remove YAGUI again (only its own files)
   --screenshot <file.png>      write a picture of the window and exit
   --write-icon <file.png> <size>
                                write the program icon (used when packaging)
@@ -106,7 +106,8 @@ fn main() -> eframe::Result<()> {
         if quiet {
             attach_console();
             let dir = value("--dir").map(PathBuf::from).unwrap_or_else(installer::default_dir);
-            match installer::uninstall(&dir, has("--remove-settings"), !has("--no-register")) {
+            let u = installer::UninstallOptions { remove_settings: has("--remove-settings"), register: !has("--no-register"), shortcuts: !has("--no-shortcuts") };
+            match installer::uninstall(&dir, &u) {
                 Ok(()) => println!("uninstalled"),
                 Err(e) => {
                     eprintln!("uninstall failed: {e}");
@@ -116,6 +117,10 @@ fn main() -> eframe::Result<()> {
             return Ok(());
         }
         let _ = app::updates::START_MODE.set(app::updates::StartMode::Uninstall);
+        // Settings > Apps passes the folder YAGUI was installed to.
+        if let Some(d) = value("--dir") {
+            let _ = app::updates::UNINSTALL_DIR.set(PathBuf::from(d));
+        }
     } else if installer::is_setup_name() && !installer::running_installed() {
         // Started as "YAGUI-Setup-….exe": offer to install.
         let _ = app::updates::START_MODE.set(app::updates::StartMode::Install);

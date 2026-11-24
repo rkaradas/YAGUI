@@ -294,8 +294,9 @@ fn form_ui(ui: &mut egui::Ui, cmds: &[Cmd], f: &mut Form, sug: &Suggest, jobs: &
 
 impl App {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
-        let sug = Suggest::from(self.tabs.get(self.active));
         if let Some(mut f) = self.dialog.take() {
+            // Built only while a dialog is open (it copies every branch, tag and changed file).
+            let sug = Suggest::from(self.tabs.get(self.active));
             let cmd = self.cmds[f.cmd].clone();
             let args = self.form_args(&f);
             let line = self.display_line(&f);
