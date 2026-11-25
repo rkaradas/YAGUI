@@ -1,4 +1,4 @@
-# Changelog
+# Changelog 
 
 All notable changes to YAGUI. Versions follow [Semantic Versioning](https://semver.org/):
 MAJOR.MINOR.PATCH. The release workflow takes the notes for a version from this file.
