@@ -11,7 +11,7 @@ use super::tree::{self, Row};
 use super::{diffview, Act, App, DetailTab, Repo, View, ViewOpt};
 use crate::catalog::{self, CATS};
 use crate::git::{self, FileStatus, JobState};
-use crate::i18n::{Lang, c, tr, trs};
+use crate::i18n::{Lang, c, keys, tr, trs};
 use crate::icons::{self, Icon};
 use crate::theme;
 
@@ -297,9 +297,9 @@ impl App {
                     menu_cmd(ui, &self.cmds, acts, "init", Some(tr("Init New Repository…", "Neues Repository anlegen…")), vec![]);
                     menu_cmd(ui, &self.cmds, acts, "clone", Some(tr("Clone…", "Klonen…")), vec![]);
                     ui.separator();
-                    menu_item(ui, acts, tr("New Tab   Ctrl+T", "Neuer Tab   Strg+T"), Act::Manager);
-                    menu_item(ui, acts, tr("Open Repository…   Ctrl+O", "Repository öffnen…   Strg+O"), Act::OpenRepoDialog);
-                    menu_item(ui, acts, tr("Quick Launch…   Ctrl+P", "Schnellstart…   Strg+P"), Act::QuickLaunch);
+                    menu_item(ui, acts, &*keys(tr("New Tab   Ctrl+T", "Neuer Tab   Strg+T")), Act::Manager);
+                    menu_item(ui, acts, &*keys(tr("Open Repository…   Ctrl+O", "Repository öffnen…   Strg+O")), Act::OpenRepoDialog);
+                    menu_item(ui, acts, &*keys(tr("Quick Launch…   Ctrl+P", "Schnellstart…   Strg+P")), Act::QuickLaunch);
                     ui.menu_button(tr("Recent", "Zuletzt geöffnet"), |ui| {
                         if self.recent.is_empty() {
                             ui.label(RichText::new(tr("Nothing yet", "Noch nichts")).color(theme::TEXT_DIM()));
@@ -312,14 +312,14 @@ impl App {
                         }
                     });
                     ui.separator();
-                    ui.add_enabled_ui(has, |ui| menu_item(ui, acts, tr("Close Tab   Ctrl+W", "Tab schließen   Strg+W"), Act::CloseTab(self.active)));
-                    ui.add_enabled_ui(!self.closed_tabs.is_empty(), |ui| menu_item(ui, acts, tr("Restore Closed Tab   Ctrl+Shift+T", "Geschlossenen Tab wiederherstellen   Strg+Umschalt+T"), Act::RestoreTab));
+                    ui.add_enabled_ui(has, |ui| menu_item(ui, acts, &*keys(tr("Close Tab   Ctrl+W", "Tab schließen   Strg+W")), Act::CloseTab(self.active)));
+                    ui.add_enabled_ui(!self.closed_tabs.is_empty(), |ui| menu_item(ui, acts, &*keys(tr("Restore Closed Tab   Ctrl+Shift+T", "Geschlossenen Tab wiederherstellen   Strg+Umschalt+T")), Act::RestoreTab));
                     ui.separator();
                     menu_item(ui, acts, tr("Configure SSH Keys…", "SSH-Schlüssel einrichten…"), Act::Ssh);
                     menu_item(ui, acts, tr("Accounts…", "Konten…"), Act::Accounts);
                     ui.separator();
                     menu_item(ui, acts, tr("Check for Updates…", "Nach Updates suchen…"), Act::CheckUpdates);
-                    menu_item(ui, acts, tr("Preferences…   Ctrl+,", "Einstellungen…   Strg+,"), Act::Prefs);
+                    menu_item(ui, acts, &*keys(tr("Preferences…   Ctrl+,", "Einstellungen…   Strg+,")), Act::Prefs);
                     ui.separator();
                     if ui.button(tr("Exit", "Beenden")).clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -328,8 +328,8 @@ impl App {
                 // View – what the history shows.
                 ui.menu_button(tr("View", "Ansicht"), |ui| {
                     ui.add_enabled_ui(has, |ui| {
-                        menu_item(ui, acts, tr("Show Uncommitted Changes   Ctrl+1", "Lokale Änderungen zeigen   Strg+1"), Act::View(View::Changes));
-                        menu_item(ui, acts, tr("Show All Commits   Ctrl+2", "Alle Commits zeigen   Strg+2"), Act::View(View::Commits));
+                        menu_item(ui, acts, &*keys(tr("Show Uncommitted Changes   Ctrl+1", "Lokale Änderungen zeigen   Strg+1")), Act::View(View::Changes));
+                        menu_item(ui, acts, &*keys(tr("Show All Commits   Ctrl+2", "Alle Commits zeigen   Strg+2")), Act::View(View::Commits));
                         ui.separator();
                         let o = self.tabs.get(self.active).map(|r| r.log_opts.clone()).unwrap_or_default();
                         let check = |ui: &mut egui::Ui, on: bool, label: &str, help: &str, opt: ViewOpt, acts: &mut Vec<Act>| {
@@ -340,7 +340,7 @@ impl App {
                             }
                         };
                         check(ui, self.hide_details, tr("Hide Commit Details", "Commit-Details ausblenden"), tr("More room for the commit list", "Mehr Platz für die Commit-Liste"), ViewOpt::Details, acts);
-                        if ui.button(tr("Show HEAD   Ctrl+H", "HEAD zeigen   Strg+H")).on_hover_text(tr("Jump to the commit you are on", "Springt zum aktuellen Commit")).clicked() {
+                        if ui.button(&*keys(tr("Show HEAD   Ctrl+H", "HEAD zeigen   Strg+H"))).on_hover_text(tr("Jump to the commit you are on", "Springt zum aktuellen Commit")).clicked() {
                             acts.push(Act::ViewOpt(ViewOpt::Head));
                             ui.close();
                         }
@@ -367,14 +367,14 @@ impl App {
                 });
                 ui.menu_button(tr("Repository", "Repository"), |ui| {
                     ui.add_enabled_ui(has, |ui| {
-                        menu_item(ui, acts, tr("Refresh   F5", "Neu laden   F5"), Act::Refresh);
+                        menu_item(ui, acts, &*keys(tr("Refresh   F5", "Neu laden   F5")), Act::Refresh);
                         ui.separator();
-                        menu_cmd(ui, &self.cmds, acts, "fetch", Some(tr("Fetch…   Ctrl+Shift+L", "Fetch…   Strg+Umschalt+L")), vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "pull", Some(tr("Pull…   Ctrl+Shift+P", "Pull…   Strg+Umschalt+P")), vec![]);
-                        menu_cmd(ui, &self.cmds, acts, "push", Some(tr("Push…   Ctrl+Shift+U", "Push…   Strg+Umschalt+U")), vec![]);
+                        menu_cmd(ui, &self.cmds, acts, "fetch", Some(&*keys(tr("Fetch…   Ctrl+Shift+L", "Fetch…   Strg+Umschalt+L"))), vec![]);
+                        menu_cmd(ui, &self.cmds, acts, "pull", Some(tr("Pull…", "Pull…")), vec![]);
+                        menu_cmd(ui, &self.cmds, acts, "push", Some(&*keys(tr("Push…   Ctrl+Shift+U", "Push…   Strg+Umschalt+U"))), vec![]);
                         ui.separator();
-                        menu_cmd(ui, &self.cmds, acts, "stash_push", Some(tr("Save Stash…   Ctrl+Shift+S", "Stash speichern…   Strg+Umschalt+S")), vec![]);
-                        menu_item(ui, acts, tr("New Branch…   Ctrl+Shift+B", "Neuer Branch…   Strg+Umschalt+B"), Act::NewBranch(None));
+                        menu_cmd(ui, &self.cmds, acts, "stash_push", Some(&*keys(tr("Save Stash…   Ctrl+Shift+S", "Stash speichern…   Strg+Umschalt+S"))), vec![]);
+                        menu_item(ui, acts, &*keys(tr("New Branch…   Ctrl+Shift+B", "Neuer Branch…   Strg+Umschalt+B")), Act::NewBranch(None));
                         menu_item(ui, acts, tr("New Tag…", "Neuer Tag…"), Act::NewTag(None));
                         menu_cmd(ui, &self.cmds, acts, "worktree_add", Some(tr("New Worktree…", "Neuer Worktree…")), vec![]);
                         ui.separator();
@@ -397,9 +397,9 @@ impl App {
                         ui.separator();
                         if let Some(r) = self.tabs.get(self.active) {
                             let p = r.path.clone();
-                            menu_item(ui, acts, tr("Open In File Explorer   Ctrl+Alt+O", "Im Datei-Explorer öffnen   Strg+Alt+O"), Act::Explorer(p));
+                            menu_item(ui, acts, &*keys(tr("Open In File Explorer   Ctrl+Alt+O", "Im Datei-Explorer öffnen   Strg+Alt+O")), Act::Explorer(p));
                         }
-                        menu_item(ui, acts, tr("Open In Console   Ctrl+Alt+T", "In Konsole öffnen   Strg+Alt+T"), Act::Terminal);
+                        menu_item(ui, acts, &*keys(tr("Open In Console   Ctrl+Alt+T", "In Konsole öffnen   Strg+Alt+T")), Act::Terminal);
                         ui.separator();
                         menu_item(ui, acts, tr("Repository Statistics…", "Repository-Statistik…"), Act::Stats);
                         menu_item(ui, acts, tr("Repository Treemap…", "Repository-Treemap…"), Act::Treemap);
@@ -410,7 +410,7 @@ impl App {
                 });
                 // Every git command, grouped: the full set stays one click away.
                 ui.menu_button(tr("Commands", "Befehle"), |ui| {
-                    menu_item(ui, acts, tr("Find a command…   Ctrl+Shift+P", "Befehl suchen…   Strg+Umschalt+P"), Act::QuickLaunch);
+                    menu_item(ui, acts, &*keys(tr("Find a command…   Ctrl+Shift+P", "Befehl suchen…   Strg+Umschalt+P")), Act::QuickLaunch);
                     menu_item(ui, acts, tr("Browse all commands…", "Alle Befehle durchsuchen…"), Act::Commands(true));
                     if !self.custom_cmds.is_empty() {
                         ui.menu_button(tr("Custom Commands", "Eigene Befehle"), |ui| {
@@ -440,13 +440,13 @@ impl App {
                     }
                 });
                 ui.menu_button(tr("Window", "Fenster"), |ui| {
-                    menu_item(ui, acts, tr("Select Previous Tab   Ctrl+Shift+Tab", "Vorheriger Tab   Strg+Umschalt+Tab"), Act::TabStep(-1));
-                    menu_item(ui, acts, tr("Select Next Tab   Ctrl+Tab", "Nächster Tab   Strg+Tab"), Act::TabStep(1));
+                    menu_item(ui, acts, &*keys(tr("Select Previous Tab   Ctrl+Shift+Tab", "Vorheriger Tab   Strg+Umschalt+Tab")), Act::TabStep(-1));
+                    menu_item(ui, acts, &*keys(tr("Select Next Tab   Ctrl+Tab", "Nächster Tab   Strg+Tab")), Act::TabStep(1));
                     ui.separator();
                     menu_item(ui, acts, tr("Switch Theme", "Hell/Dunkel wechseln"), Act::Theme(!theme::is_light()));
-                    menu_item(ui, acts, tr("Zoom In   Ctrl++", "Vergrößern   Strg++"), Act::Zoom(0.1));
-                    menu_item(ui, acts, tr("Zoom Out   Ctrl+-", "Verkleinern   Strg+-"), Act::Zoom(-0.1));
-                    menu_item(ui, acts, tr("Actual Size   Ctrl+0", "Originalgröße   Strg+0"), Act::Zoom(0.0));
+                    menu_item(ui, acts, &*keys(tr("Zoom In   Ctrl++", "Vergrößern   Strg++")), Act::Zoom(0.1));
+                    menu_item(ui, acts, &*keys(tr("Zoom Out   Ctrl+-", "Verkleinern   Strg+-")), Act::Zoom(-0.1));
+                    menu_item(ui, acts, &*keys(tr("Actual Size   Ctrl+0", "Originalgröße   Strg+0")), Act::Zoom(0.0));
                 });
                 ui.menu_button(tr("Help", "Hilfe"), |ui| {
                     menu_item(ui, acts, tr("Keyboard Shortcuts", "Tastenkürzel"), Act::Shortcuts);
@@ -495,7 +495,7 @@ impl App {
                         acts.push(Act::ToggleTabList);
                     }
                 }
-                if tool_button(ui, Icon::Search, tr("Quick Launch", "Schnellstart"), tr("Find any Git command (Ctrl+Shift+P)", "Jeden Git-Befehl finden (Strg+Umschalt+P)"), "", true).clicked() {
+                if tool_button(ui, Icon::Search, tr("Quick Launch", "Schnellstart"), &*keys(tr("Find any Git command (Ctrl+Shift+P)", "Jeden Git-Befehl finden (Strg+Umschalt+P)")), "", true).clicked() {
                     acts.push(Act::QuickLaunch);
                 }
                 separator_v(ui);
@@ -625,7 +625,7 @@ impl App {
                         acts.push(Act::Commands(!cmds_on));
                     }
                     separator_v(ui);
-                    if tool_button(ui, Icon::Terminal, tr("Console", "Konsole"), tr("Open a terminal in this repository (Ctrl+Alt+T)", "Terminal in diesem Repository öffnen (Strg+Alt+T)"), "", has).clicked() {
+                    if tool_button(ui, Icon::Terminal, tr("Console", "Konsole"), &*keys(tr("Open a terminal in this repository (Ctrl+Alt+T)", "Terminal in diesem Repository öffnen (Strg+Alt+T)")), "", has).clicked() {
                         acts.push(Act::Terminal);
                     }
                     let b = tool_button_menu(ui, Icon::Folder, tr("Open in", "Öffnen in"), tr("Open the folder in another program", "Ordner in einem anderen Programm öffnen"), "", has);
@@ -689,7 +689,7 @@ impl App {
                     }
                 }
                 ui.add_space(4.0);
-                if icon_button(ui, Icon::Plus, tr("New tab: Repository Manager (Ctrl+T)", "Neuer Tab: Repository Manager (Strg+T)")).clicked() {
+                if icon_button(ui, Icon::Plus, &*keys(tr("New tab: Repository Manager (Ctrl+T)", "Neuer Tab: Repository Manager (Strg+T)"))).clicked() {
                     acts.push(Act::Manager);
                 }
                 for (resp, i) in menus {

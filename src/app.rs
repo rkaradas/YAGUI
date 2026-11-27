@@ -1224,6 +1224,13 @@ fn state_file() -> Option<PathBuf> {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, repo: Option<PathBuf>, screenshot: Option<PathBuf>) -> Self {
         theme::apply(&cc.egui_ctx);
+        // Zoom keys are YAGUI's own (they keep the zoom in the preferences). egui's own Ctrl+Q
+        // closed YAGUI at once, also on German keyboards when "@" was typed with Ctrl+Alt+Q;
+        // quitting is File > Exit (on macOS ⌘Q, which the app menu handles).
+        cc.egui_ctx.options_mut(|o| {
+            o.zoom_with_keyboard = false;
+            o.quit_shortcuts.clear();
+        });
         perf::mark_ui_thread();
         let _ = REPAINT.set(cc.egui_ctx.clone());
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
@@ -1919,39 +1926,65 @@ impl eframe::App for App {
             }
         }
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(POLL_SECONDS));
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::P)) {
+        // Shortcuts (their labels: i18n::keys). COMMAND is Ctrl on Windows and Linux and ⌘ on
+        // macOS. consume_key ignores extra Shift and Alt (Ctrl+T would also take Ctrl+Shift+T),
+        // so the combinations with Shift or Alt are checked first.
+        let cmd = egui::Modifiers::COMMAND;
+        let cmd_shift = cmd | egui::Modifiers::SHIFT;
+        let cmd_alt = cmd | egui::Modifiers::ALT;
+        // Tabs switch with Control everywhere (⌘Tab belongs to macOS).
+        let ctrl = egui::Modifiers::CTRL;
+        let ctrl_shift = ctrl | egui::Modifiers::SHIFT;
+        // ⌘H hides the app on macOS, so Show HEAD is ⇧⌘H there.
+        let head = if cfg!(target_os = "macos") { cmd_shift } else { cmd };
+        if ctx.input_mut(|i| i.consume_key(cmd_shift, egui::Key::P)) {
             self.quick = Some(String::new());
         }
         {
-            let c = egui::Modifiers::CTRL;
-            let cs = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
-            let mut keys: Vec<Act> = vec![];
+            let repo = self.repo().map(|r| r.path.clone());
+            if ctx.input_mut(|i| i.consume_key(cmd_alt, egui::Key::T)) {
+                if let Some(p) = &repo {
+                    auth::open_terminal(self.shell, p);
+                }
+            }
+            if ctx.input_mut(|i| i.consume_key(cmd_alt, egui::Key::O)) {
+                if let Some(p) = &repo {
+                    auth::open_explorer(p);
+                }
+            }
+        }
+        {
+            let mut acts: Vec<Act> = vec![];
             let mut k = |m: egui::Modifiers, key: egui::Key, a: Act| {
                 if ctx.input_mut(|i| i.consume_key(m, key)) {
-                    keys.push(a);
+                    acts.push(a);
                 }
             };
-            k(c, egui::Key::T, Act::Manager);
-            k(c, egui::Key::O, Act::OpenRepoDialog);
-            k(c, egui::Key::P, Act::QuickLaunch);
-            k(cs, egui::Key::T, Act::RestoreTab);
-            k(c, egui::Key::W, Act::CloseTab(self.active));
-            k(c, egui::Key::Tab, Act::TabStep(1));
-            k(cs, egui::Key::Tab, Act::TabStep(-1));
-            k(c, egui::Key::Num1, Act::View(View::Changes));
-            k(c, egui::Key::Num2, Act::View(View::Commits));
-            k(c, egui::Key::H, Act::ViewOpt(ViewOpt::Head));
-            k(cs, egui::Key::L, Act::Open("fetch", vec![]));
-            k(cs, egui::Key::U, Act::Open("push", vec![]));
-            k(cs, egui::Key::S, Act::Open("stash_push", vec![]));
-            k(cs, egui::Key::B, Act::NewBranch(None));
-            k(c, egui::Key::Comma, Act::Prefs);
-            k(c, egui::Key::Plus, Act::Zoom(0.1));
-            k(c, egui::Key::Equals, Act::Zoom(0.1));
-            k(c, egui::Key::Minus, Act::Zoom(-0.1));
-            k(c, egui::Key::Num0, Act::Zoom(0.0));
-            if !keys.is_empty() && (!self.tabs.is_empty() || keys.iter().all(|a| matches!(a, Act::Manager | Act::OpenRepoDialog | Act::QuickLaunch | Act::RestoreTab | Act::Prefs | Act::Zoom(_)))) {
-                self.apply(keys, &ctx);
+            k(cmd_shift, egui::Key::T, Act::RestoreTab);
+            k(ctrl_shift, egui::Key::Tab, Act::TabStep(-1));
+            k(cmd_shift, egui::Key::L, Act::Open("fetch", vec![]));
+            k(cmd_shift, egui::Key::U, Act::Open("push", vec![]));
+            k(cmd_shift, egui::Key::S, Act::Open("stash_push", vec![]));
+            k(cmd_shift, egui::Key::B, Act::NewBranch(None));
+            k(head, egui::Key::H, Act::ViewOpt(ViewOpt::Head));
+            k(cmd, egui::Key::T, Act::Manager);
+            k(cmd, egui::Key::O, Act::OpenRepoDialog);
+            k(cmd, egui::Key::P, Act::QuickLaunch);
+            k(cmd, egui::Key::W, Act::CloseTab(self.active));
+            k(ctrl, egui::Key::Tab, Act::TabStep(1));
+            k(cmd, egui::Key::Num1, Act::View(View::Changes));
+            k(cmd, egui::Key::Num2, Act::View(View::Commits));
+            k(cmd, egui::Key::Comma, Act::Prefs);
+            k(cmd, egui::Key::Plus, Act::Zoom(0.1));
+            k(cmd, egui::Key::Equals, Act::Zoom(0.1));
+            k(cmd, egui::Key::Minus, Act::Zoom(-0.1));
+            k(cmd, egui::Key::Num0, Act::Zoom(0.0));
+            if acts.iter().any(|a| matches!(a, Act::TabStep(_))) {
+                // On macOS egui would also take ⌃⇧Tab as Shift+Tab and move the keyboard focus.
+                ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+            }
+            if !acts.is_empty() && (!self.tabs.is_empty() || acts.iter().all(|a| matches!(a, Act::Manager | Act::OpenRepoDialog | Act::QuickLaunch | Act::RestoreTab | Act::Prefs | Act::Zoom(_)))) {
+                self.apply(acts, &ctx);
             }
         }
         // Fetch remotes automatically (Preferences > General), in the background.
@@ -1974,16 +2007,9 @@ impl eframe::App for App {
                 }
             }
         }
-        if let Some(p) = self.repo().map(|r| r.path.clone()) {
-            let ca = egui::Modifiers::CTRL | egui::Modifiers::ALT;
-            if ctx.input_mut(|i| i.consume_key(ca, egui::Key::T)) {
-                auth::open_terminal(self.shell, &p);
-            }
-            if ctx.input_mut(|i| i.consume_key(ca, egui::Key::O)) {
-                auth::open_explorer(&p);
-            }
-        }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F5)) {
+        // F5 needs Fn on most Mac keyboards: ⌘R there too.
+        let refresh_mac = cfg!(target_os = "macos") && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::R));
+        if refresh_mac || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F5)) {
             if let Some(t) = self.tabs.get_mut(self.active) {
                 t.refresh();
             }

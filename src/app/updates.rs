@@ -289,8 +289,9 @@ impl App {
             if let Some(a) = r.asset_for_this_computer().cloned() {
                 let (tx, rx) = channel();
                 let c = ctx.clone();
+                let version = r.tag.trim_start_matches('v').to_string();
                 std::thread::spawn(move || {
-                    let res = updater::download(&a).and_then(|f| updater::install(&f));
+                    let res = updater::download(&a).and_then(|f| updater::install(&f, &version));
                     let _ = tx.send(Msg::Installed(res));
                     c.request_repaint();
                 });

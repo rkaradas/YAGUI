@@ -80,10 +80,10 @@ jobs:
             echo
             echo "### Download"
             echo "- **Windows:** \`YAGUI-Setup-$VERSION-windows-x64.exe\` installs YAGUI (uninstall via Settings > Apps). \`yagui-$VERSION-windows-x64.exe\` runs without installing."
-            echo "- **macOS:** \`YAGUI-$VERSION-macos-universal.dmg\`, drag YAGUI into Applications. The app is not notarized: macOS blocks the first start; then click \"Open Anyway\" in System Settings > Privacy & Security (macOS 14 and older: right-click > Open)."
+            echo "- **macOS:** \`YAGUI-$VERSION-macos-universal.dmg\`, drag YAGUI into Applications (or start it right from the disk image or any other folder). The app is not notarized: macOS blocks the first start; then click \"Open Anyway\" in System Settings > Privacy & Security within about an hour and confirm with your login password (macOS 14 and older: right-click > Open)."
             echo "- **Linux:** \`yagui_${VERSION}_amd64.deb\` (Debian/Ubuntu) or \`yagui-$VERSION-linux-x64.tar.gz\` (run \`./yagui --install\`)."
             echo
-            echo "Git must be installed (on Linux also curl, which the update check uses; the .deb brings both). YAGUI checks for updates once a day (Help > Check for Updates)."
+            echo "Git must be installed (on macOS Apple's Command Line Tools, \`xcode-select --install\`, or Git from Homebrew; on Linux also curl, which the update check uses; the .deb brings both). YAGUI checks for updates once a day (Help > Check for Updates)."
           } >> notes.md
           # none | true (draft) | false (published); an API error stops the step instead of
           # being taken for "no release" (that would create a second draft for the tag).
@@ -199,6 +199,29 @@ jobs:
             echo "::warning::Rosetta is not available, the x86_64 part was not started"
           fi
 
+      - name: Window test (macOS)
+        if: runner.os == 'macOS'
+        # Nowhere else does the workflow open YAGUI's window on a Mac: draw it once and keep the
+        # picture. Not required for a release; a failure here only shows as a warning.
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          # --screenshot draws the window and exits; perl's alarm ends a window that never shows.
+          perl -e 'alarm 120; exec @ARGV' ./target/release/yagui --screenshot "$RUNNER_TEMP/yagui-macos.png"
+          size=$(stat -f%z "$RUNNER_TEMP/yagui-macos.png")
+          echo "::notice::YAGUI's window was drawn on macOS ($size bytes)"
+          test "$size" -gt 20000
+
+      - name: Keep the window picture (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: yagui-macos-window
+          path: ${{ runner.temp }}/yagui-macos.png
+          retention-days: 3
+          if-no-files-found: ignore
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -228,7 +251,9 @@ jobs:
             ./target/release/yagui --write-icon "yagui.iconset/icon_${s}x${s}@2x.png" $((s*2))
           done
           iconutil -c icns -o YAGUI.app/Contents/Resources/yagui.icns yagui.iconset
-          codesign --force --deep -s - YAGUI.app
+          # Ad hoc; one executable and nothing nested, so no --deep (deprecated for signing).
+          codesign --force -s - YAGUI.app
+          codesign --verify --strict --verbose=2 YAGUI.app
           mkdir dmg
           cp -R YAGUI.app dmg/
           ln -s /Applications dmg/Applications

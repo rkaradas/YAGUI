@@ -5,6 +5,22 @@ MAJOR.MINOR.PATCH. The release workflow takes the notes for a version from this 
 
 ## [Unreleased]
 
+### Added
+- macOS: "Open in" lists the editors and IDEs installed in Applications (Visual Studio Code, Cursor, Zed, Sublime Text, Xcode, JetBrains IDEs and more)
+- Linux: "Open in" lists the editors whose launcher is on PATH (code, codium, subl, zed, JetBrains Toolbox scripts and more)
+- macOS: ⌘R refreshes (F5 needs the Fn key on most Mac keyboards)
+
+### Changed
+- macOS: keyboard shortcuts use the Command key, and menus, tooltips and the Shortcuts window show ⌘, ⇧ and ⌥. Show HEAD is ⇧⌘H (⌘H hides the app); switching tabs stays on ⌃Tab
+- Accounts: the credential helpers fit the system (macOS Keychain on macOS), and the dialog shows the helper in effect (also one set for the whole system, like Apple's Keychain helper or Git for Windows' Credential Manager). Choosing a helper now replaces those instead of being asked after them, and "none" really switches helpers off; its description says that YAGUI then cannot sign in over HTTPS, and "Save sign-in" waits for a helper
+
+### Fixed
+- macOS: Git, Git LFS and Git Flow from Homebrew or MacPorts are found when YAGUI is started from Finder or the Dock
+- macOS: after an update from within the app, YAGUI.app gets the new version in its Info.plist and is signed again (it was left with a broken signature); an app updated by YAGUI 1.1.0 or older is signed again at its first start
+- Ctrl+Shift+T (restore closed tab), Ctrl+Shift+Tab (previous tab), Ctrl+Alt+T (console) and Ctrl+Alt+O (file explorer) did what Ctrl+T, Ctrl+Tab and Ctrl+O do
+- Ctrl+Q closed YAGUI at once, also while typing "@" with Ctrl+Alt+Q on German keyboards; quit with File > Exit (on macOS ⌘Q)
+- The Pull menu entry showed Ctrl+Shift+P, which opens Find a command
+
 ## [1.1.0] - 2026-11-24
 
 ### Added

@@ -125,6 +125,16 @@ fn load_fonts(ctx: &egui::Context) {
         defs.font_data.insert("consolas".into(), Arc::new(FontData::from_owned(b)));
         defs.families.entry(FontFamily::Monospace).or_default().insert(0, "consolas".into());
     }
+    // macOS: the shortcut symbols ⌘ ⇧ ⌥ ⌃ (i18n::keys) are not in egui's own fonts; Apple
+    // Symbols has them. Last in the chains, so it only fills in missing characters.
+    if cfg!(target_os = "macos") {
+        if let Ok(b) = std::fs::read("/System/Library/Fonts/Apple Symbols.ttf") {
+            defs.font_data.insert("apple-symbols".into(), Arc::new(FontData::from_owned(b)));
+            for family in [FontFamily::Proportional, FontFamily::Monospace] {
+                defs.families.entry(family).or_default().push("apple-symbols".into());
+            }
+        }
+    }
     // Semibold falls back to the regular chain (keeps emoji/symbol coverage).
     let mut chain = semibold_fonts;
     chain.extend(defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());

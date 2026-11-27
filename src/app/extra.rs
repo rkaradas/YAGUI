@@ -14,7 +14,7 @@ use eframe::egui::{self, Align, Align2, Color32, FontId, Id, Layout, RichText, V
 
 use super::App;
 use crate::git::JobSpec;
-use crate::i18n::{tr, trs};
+use crate::i18n::{keys, tr, trs};
 use crate::theme;
 
 // ---------------------------------------------------------------------------------------------
@@ -923,7 +923,7 @@ impl App {
         egui::Window::new(RichText::new(tr("Keyboard Shortcuts", "Tastenkürzel")).font(FontId::new(14.5, theme::semibold()))).id(Id::unique("shortcuts")).open(&mut open).collapsible(false).resizable(false).default_width(460.0).show(ctx, |ui| {
             egui::Grid::new("sc_grid").num_columns(2).striped(true).spacing([24.0, 4.0]).show(ui, |ui| {
                 for (k, en, de) in SHORTCUTS {
-                    ui.label(RichText::new(*k).monospace().size(12.0));
+                    ui.label(RichText::new(keys(k)).monospace().size(12.0));
                     ui.label(tr(en, de));
                     ui.end_row();
                 }

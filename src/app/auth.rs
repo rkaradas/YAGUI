@@ -9,7 +9,7 @@ use eframe::egui::{self, Align, Align2, Color32, FontId, Id, Layout, RichText, V
 use super::ui::{icon, icon_button};
 use super::{App, Lang};
 use crate::git::{JobSpec, JobState};
-use crate::i18n::{tr, trs};
+use crate::i18n::{keys, tr, trs};
 use crate::icons::Icon;
 use crate::theme;
 
@@ -45,6 +45,7 @@ impl ShellTool {
 #[derive(Clone)]
 pub struct Editor {
     pub name: String,
+    /// The program; on macOS the app bundle (`…/Visual Studio Code.app`).
     pub exe: PathBuf,
 }
 
@@ -54,6 +55,12 @@ fn env_path(var: &str) -> Option<PathBuf> {
 
 /// Editors and IDEs installed in their usual places.
 pub fn detect_editors() -> Vec<Editor> {
+    if cfg!(target_os = "macos") {
+        return mac_editors();
+    }
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        return linux_editors();
+    }
     let mut out = Vec::new();
     let local = env_path("LOCALAPPDATA");
     let pf = env_path("ProgramFiles");
@@ -97,6 +104,98 @@ pub fn detect_editors() -> Vec<Editor> {
     out
 }
 
+/// Editor apps on macOS, in /Applications and ~/Applications (where JetBrains Toolbox puts its
+/// IDEs, also in a "JetBrains Toolbox" subfolder). They are opened with `open -a`.
+fn mac_editors() -> Vec<Editor> {
+    const APPS: [(&str, &str); 13] = [
+        ("Visual Studio Code", "Visual Studio Code.app"),
+        ("Visual Studio Code Insiders", "Visual Studio Code - Insiders.app"),
+        ("VSCodium", "VSCodium.app"),
+        ("Cursor", "Cursor.app"),
+        ("Windsurf", "Windsurf.app"),
+        ("Devin", "Devin.app"),
+        ("Zed", "Zed.app"),
+        ("Zed Preview", "Zed Preview.app"),
+        ("Sublime Text", "Sublime Text.app"),
+        ("Nova", "Nova.app"),
+        ("BBEdit", "BBEdit.app"),
+        ("TextMate", "TextMate.app"),
+        ("Xcode", "Xcode.app"),
+    ];
+    // Editions carry their own names ("IntelliJ IDEA CE.app", "PyCharm Professional Edition.app").
+    const JETBRAINS: [&str; 12] = ["IntelliJ IDEA", "PyCharm", "WebStorm", "CLion", "GoLand", "RustRover", "Rider", "PhpStorm", "RubyMine", "DataGrip", "Fleet", "Android Studio"];
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = env_path("HOME") {
+        roots.push(home.join("Applications"));
+        roots.push(home.join("Applications/JetBrains Toolbox"));
+    }
+    let mut out: Vec<Editor> = Vec::new();
+    let mut add = |name: String, app: PathBuf| {
+        if app.is_dir() && !out.iter().any(|e| e.name == name) {
+            out.push(Editor { name, exe: app });
+        }
+    };
+    for (name, app) in APPS {
+        for r in &roots {
+            add(name.to_string(), r.join(app));
+        }
+    }
+    for r in &roots {
+        let Ok(rd) = std::fs::read_dir(r) else { continue };
+        let mut apps: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "app")).collect();
+        apps.sort();
+        for app in apps {
+            let name = app.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            if JETBRAINS.iter().any(|j| name.starts_with(j)) {
+                add(name, app);
+            }
+        }
+    }
+    out
+}
+
+/// Editors on Linux: launchers on PATH (packages, Snap) and the scripts JetBrains Toolbox writes
+/// to ~/.local/share/JetBrains/Toolbox/scripts. A plain `zed` counts only in the home folder
+/// (Zed's own installer puts it in ~/.local/bin): elsewhere it is usually the ZFS event daemon,
+/// which is why distributions name the editor `zeditor`.
+fn linux_editors() -> Vec<Editor> {
+    const COMMANDS: [(&str, &str); 17] = [
+        ("Visual Studio Code", "code"),
+        ("Visual Studio Code Insiders", "code-insiders"),
+        ("VSCodium", "codium"),
+        ("Cursor", "cursor"),
+        ("Windsurf", "windsurf"),
+        ("Zed", "zeditor"),
+        ("Zed", "zed"),
+        ("Sublime Text", "subl"),
+        ("Kate", "kate"),
+        ("IntelliJ IDEA", "idea"),
+        ("PyCharm", "pycharm"),
+        ("WebStorm", "webstorm"),
+        ("CLion", "clion"),
+        ("GoLand", "goland"),
+        ("RustRover", "rustrover"),
+        ("Rider", "rider"),
+        ("PhpStorm", "phpstorm"),
+    ];
+    let home = env_path("HOME");
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).filter(|d| !d.as_os_str().is_empty()).collect()).unwrap_or_default();
+    if let Some(h) = &home {
+        dirs.push(h.join(".local/share/JetBrains/Toolbox/scripts"));
+    }
+    let mut out: Vec<Editor> = Vec::new();
+    for (name, cmd) in COMMANDS {
+        if out.iter().any(|e| e.name == name) {
+            continue;
+        }
+        let allowed = |d: &PathBuf| cmd != "zed" || home.as_ref().is_some_and(|h| d.starts_with(h));
+        if let Some(exe) = dirs.iter().filter(|d| allowed(d)).map(|d| d.join(cmd)).find(|p| p.is_file()) {
+            out.push(Editor { name: name.to_string(), exe });
+        }
+    }
+    out
+}
+
 /// Windows tools want backslashes; git reports paths with forward slashes.
 pub fn native(p: &Path) -> String {
     let s = p.display().to_string();
@@ -122,7 +221,11 @@ pub fn open_url(url: &str) {
 }
 
 pub fn open_in_editor(e: &Editor, p: &Path) {
-    let _ = std::process::Command::new(&e.exe).arg(native(p)).spawn();
+    if cfg!(target_os = "macos") {
+        let _ = std::process::Command::new("open").arg("-a").arg(&e.exe).arg(p).spawn();
+    } else {
+        let _ = std::process::Command::new(&e.exe).arg(native(p)).spawn();
+    }
 }
 
 fn windows_terminal() -> Option<PathBuf> {
@@ -282,7 +385,8 @@ pub struct Account {
 
 pub struct CredState {
     helper: String,
-    helper_sel: usize,
+    /// Index into `HELPERS`; None for a helper that is not in the list.
+    helper_sel: Option<usize>,
     sel: Option<usize>,
     host: String,
     user: String,
@@ -290,27 +394,98 @@ pub struct CredState {
     job: Option<u64>,
 }
 
-const HELPERS: [(&str, &str, &str); 4] = [
-    ("manager", "Git Credential Manager", "Signs in through the browser and keeps tokens in the Windows Credential Manager (recommended)."),
-    ("store", "store", "Saves passwords in a plain text file (~/.git-credentials). Not recommended."),
-    ("cache", "cache", "Keeps passwords in memory for 15 minutes."),
-    ("", "none", "Asks every time."),
+/// Credential helpers offered in Accounts: value of credential.helper, name, help (en, de).
+type Helper = (&'static str, &'static str, &'static str, &'static str);
+
+const STORE: Helper = ("store", "store", "Saves passwords in a plain text file (~/.git-credentials). Not recommended.", "Speichert Passwörter als Klartext in ~/.git-credentials. Nicht empfohlen.");
+const CACHE: Helper = ("cache", "cache", "Keeps passwords in memory for 15 minutes.", "Behält Passwörter 15 Minuten im Speicher.");
+// YAGUI runs Git without a terminal (GIT_TERMINAL_PROMPT=0), so nothing can ask for a password.
+const NO_HELPER: Helper = (
+    "",
+    "none",
+    "Git keeps no sign-in and asks for one only in a terminal. YAGUI cannot ask, so fetch, pull and push over HTTPS fail where a sign-in is needed (use SSH or another helper).",
+    "Git speichert keine Anmeldung und fragt nur im Terminal danach. YAGUI kann nicht nachfragen, daher schlagen Fetch, Pull und Push über HTTPS fehl, sobald eine Anmeldung nötig ist (SSH oder einen anderen Helper verwenden).",
+);
+
+#[cfg(windows)]
+const HELPERS: &[Helper] = &[
+    ("manager", "Git Credential Manager", "Signs in through the browser and keeps tokens in the Windows Credential Manager (recommended).", "Meldet sich über den Browser an und speichert Tokens in der Windows-Anmeldeinformationsverwaltung (empfohlen)."),
+    STORE,
+    CACHE,
+    NO_HELPER,
+];
+#[cfg(target_os = "macos")]
+const HELPERS: &[Helper] = &[
+    ("osxkeychain", "macOS Keychain", "Keeps passwords and tokens in the macOS Keychain (recommended; Apple's Git uses it by default).", "Speichert Passwörter und Tokens im macOS-Schlüsselbund (empfohlen; Apples Git nutzt ihn von sich aus)."),
+    ("manager", "Git Credential Manager", "Signs in through the browser and keeps tokens in the macOS Keychain. Git Credential Manager must be installed.", "Meldet sich über den Browser an und speichert Tokens im macOS-Schlüsselbund. Git Credential Manager muss installiert sein."),
+    STORE,
+    CACHE,
+    NO_HELPER,
+];
+#[cfg(all(unix, not(target_os = "macos")))]
+const HELPERS: &[Helper] = &[
+    ("manager", "Git Credential Manager", "Signs in through the browser. Git Credential Manager must be installed and given a credential store (credential.credentialStore, for example secretservice).", "Meldet sich über den Browser an. Git Credential Manager muss installiert und mit einem Speicher eingerichtet sein (credential.credentialStore, zum Beispiel secretservice)."),
+    STORE,
+    CACHE,
+    NO_HELPER,
 ];
 
-fn helper_help(i: usize) -> &'static str {
-    match i {
-        0 => tr(HELPERS[0].2, "Meldet sich über den Browser an und speichert Tokens in der Windows-Anmeldeinformationsverwaltung (empfohlen)."),
-        1 => tr(HELPERS[1].2, "Speichert Passwörter als Klartext in ~/.git-credentials. Nicht empfohlen."),
-        2 => tr(HELPERS[2].2, "Behält Passwörter 15 Minuten im Speicher."),
-        _ => tr(HELPERS[3].2, "Fragt jedes Mal nach."),
+fn helper_help(h: &Helper) -> &'static str {
+    tr(h.2, h.3)
+}
+
+/// The helpers Git uses outside a repository, in the order Git reads them (an empty value clears
+/// the ones before it). Git for Windows sets manager system-wide, Homebrew's and MacPorts' Git
+/// set osxkeychain there, and Apple's Git reads its own gitconfig first (scope "unknown"), so the
+/// global setting alone does not tell. A repository's own setting does not count here.
+fn effective_helpers(config: &str) -> Vec<String> {
+    let mut list: Vec<String> = Vec::new();
+    for line in config.lines() {
+        let Some((scope, value)) = line.split_once('\t') else { continue };
+        if !matches!(scope, "unknown" | "system" | "global") {
+            continue;
+        }
+        let value = value.trim();
+        if value.is_empty() {
+            list.clear();
+        } else {
+            list.push(value.to_string());
+        }
     }
+    list
+}
+
+/// Which entry of `HELPERS` a configured helper is (by its name inside the value, so
+/// "/usr/local/share/gcm-core/git-credential-manager" is Git Credential Manager).
+fn helper_index(helper: &str) -> Option<usize> {
+    if helper.is_empty() {
+        return HELPERS.iter().position(|h| h.0.is_empty());
+    }
+    HELPERS.iter().position(|h| !h.0.is_empty() && helper.contains(h.0))
 }
 
 impl CredState {
     pub fn new() -> Self {
-        let (_, h) = run_capture("git", &["config", "--global", "--get", "credential.helper"]);
-        let helper = h.trim().to_string();
-        let helper_sel = HELPERS.iter().position(|x| !x.0.is_empty() && helper.contains(x.0)).unwrap_or(if helper.is_empty() { 3 } else { 0 });
+        let (code, out) = run_capture("git", &["config", "--show-scope", "--get-all", "credential.helper"]);
+        let helpers = match code {
+            // 1: no helper set anywhere.
+            0 | 1 => Some(effective_helpers(&out)),
+            // Git before 2.26 has no --show-scope: read the values without it, outside any
+            // repository so a repository's own setting does not count.
+            129 => {
+                let mut c = std::process::Command::new("git");
+                c.args(["config", "--get-all", "credential.helper"]).current_dir(std::env::temp_dir()).stdin(std::process::Stdio::null());
+                #[cfg(windows)]
+                c.creation_flags(0x0800_0000);
+                let o = c.output().ok().filter(|o| matches!(o.status.code(), Some(0 | 1)));
+                o.map(|o| effective_helpers(&String::from_utf8_lossy(&o.stdout).lines().map(|l| format!("unknown\t{l}\n")).collect::<String>()))
+            }
+            _ => None,
+        };
+        let (helper, helper_sel) = match helpers {
+            Some(h) => (h.join(", "), helper_index(h.last().map(String::as_str).unwrap_or(""))),
+            None => (tr("unknown", "unbekannt").to_string(), None),
+        };
         CredState { helper, helper_sel, sel: None, host: "github.com".into(), user: String::new(), token: String::new(), job: None }
     }
 }
@@ -433,7 +608,7 @@ impl App {
             crate::icons::draw(&p, egui::Rect::from_center_size(egui::pos2(rect.left() + 14.0, rect.center().y), Vec2::splat(14.0)), ic, theme::TEXT());
             p.text(egui::pos2(rect.left() + 30.0, rect.center().y), Align2::LEFT_CENTER, label, FontId::proportional(13.0), theme::TEXT());
             if !shortcut.is_empty() {
-                p.text(egui::pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, shortcut, FontId::proportional(11.5), theme::TEXT_FAINT());
+                p.text(egui::pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, keys(shortcut), FontId::proportional(11.5), theme::TEXT_FAINT());
             }
             resp.clicked()
         };
@@ -831,7 +1006,8 @@ impl App {
                         });
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            let can = !st.host.trim().is_empty() && !st.user.trim().is_empty() && !st.token.is_empty();
+                            // Without a credential helper, Git would not keep the sign-in.
+                            let can = !st.host.trim().is_empty() && !st.user.trim().is_empty() && !st.token.is_empty() && !st.helper.is_empty();
                             if primary(ui, tr("Save sign-in", "Anmeldung speichern"), can) {
                                 let input = format!("protocol=https\nhost={}\nusername={}\npassword={}\n\n", st.host.trim(), st.user.trim(), st.token);
                                 act = Some((trs(format!("Save sign-in for {}", st.host.trim()), format!("Anmeldung für {} speichern", st.host.trim())), vec!["credential".into(), "approve".into()], format!("git credential approve   (host={}, username={}, password=••••)", st.host.trim(), st.user.trim()), Some(input)));
@@ -849,6 +1025,9 @@ impl App {
                             }
                         });
                         ui.add_space(4.0);
+                        if st.helper.is_empty() {
+                            ui.label(RichText::new(tr("No credential helper is set (below), so Git would not keep a sign-in.", "Es ist kein Credential-Helper eingestellt (unten), daher würde Git keine Anmeldung behalten.")).size(11.5).color(theme::ORANGE()));
+                        }
                         ui.label(RichText::new(tr("The token is handed to Git once and not kept here. With Git Credential Manager a browser sign-in also opens by itself on the first push or pull.", "Das Token wird einmal an Git übergeben und hier nicht gespeichert. Mit dem Git Credential Manager öffnet sich beim ersten Push oder Pull auch von selbst eine Anmeldung im Browser.")).size(11.5).color(theme::TEXT_FAINT()));
                         job_line(ui, &self.jobs, st.job);
                     });
@@ -859,20 +1038,38 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tr("Credential helper", "Credential-Helper")).color(theme::TEXT_DIM()));
                     let before = st.helper_sel;
-                    egui::ComboBox::from_id_salt("helper").width(200.0).selected_text(HELPERS[st.helper_sel].1).show_ui(ui, |ui| {
+                    let shown = match st.helper_sel {
+                        Some(i) => HELPERS[i].1.to_string(),
+                        None => st.helper.clone(),
+                    };
+                    egui::ComboBox::from_id_salt("helper").width(200.0).selected_text(shown).show_ui(ui, |ui| {
                         for (i, h) in HELPERS.iter().enumerate() {
-                            ui.selectable_value(&mut st.helper_sel, i, h.1).on_hover_text(helper_help(i));
+                            ui.selectable_value(&mut st.helper_sel, Some(i), h.1).on_hover_text(helper_help(h));
                         }
                     });
-                    if before != st.helper_sel {
-                        let h = HELPERS[st.helper_sel].0;
+                    if let Some(i) = st.helper_sel.filter(|_| before != st.helper_sel) {
+                        // An empty value first: it clears the helpers set system-wide (Git for
+                        // Windows, Apple's, Homebrew's and MacPorts' Git set one there), which Git
+                        // would otherwise ask first. Then the chosen one, as Git Credential Manager
+                        // and the GitHub CLI do it themselves.
+                        let h = HELPERS[i].0;
+                        let reset = "git config --global --replace-all credential.helper \"\"";
+                        let reset_args: Vec<String> = vec!["config".into(), "--global".into(), "--replace-all".into(), "credential.helper".into(), String::new()];
+                        let turn_off = (tr("Turn off credential helper", "Credential-Helper ausschalten").to_string(), reset_args, reset.to_string(), None);
                         if h.is_empty() {
-                            act = Some((tr("Turn off credential helper", "Credential-Helper ausschalten").into(), vec!["config".into(), "--global".into(), "--unset-all".into(), "credential.helper".into()], "git config --global --unset-all credential.helper".into(), None));
+                            act = Some(turn_off);
+                            st.helper.clear();
+                        } else if run_capture("git", &["config", "--global", "--replace-all", "credential.helper", ""]).0 == 0 {
+                            act = Some((tr("Set credential helper", "Credential-Helper festlegen").into(), vec!["config".into(), "--global".into(), "--add".into(), "credential.helper".into(), h.into()], format!("{reset} && git config --global --add credential.helper {h}"), None));
+                            st.helper = h.to_string();
                         } else {
-                            act = Some((tr("Set credential helper", "Credential-Helper festlegen").into(), vec!["config".into(), "--global".into(), "credential.helper".into(), h.into()], format!("git config --global credential.helper {h}"), None));
+                            // Run the reset as the job instead, so its error shows in Activity.
+                            act = Some(turn_off);
                         }
                     }
-                    ui.label(RichText::new(helper_help(st.helper_sel)).size(11.5).color(theme::TEXT_FAINT()));
+                    if let Some(i) = st.helper_sel {
+                        ui.label(RichText::new(helper_help(&HELPERS[i])).size(11.5).color(theme::TEXT_FAINT()));
+                    }
                 });
                 if !st.helper.is_empty() {
                     ui.label(RichText::new(trs(format!("Currently: {}", st.helper), format!("Aktuell: {}", st.helper))).size(11.0).color(theme::TEXT_FAINT()));
@@ -1221,5 +1418,38 @@ pub fn switch_remote_url(url: &str) -> Option<String> {
         Some(format!("https://{host}/{path}"))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_helpers_in_effect_come_from_system_and_global_settings() {
+        // Apple's Git: osxkeychain in its own gitconfig (scope "unknown"), nothing global.
+        assert_eq!(effective_helpers("unknown\tosxkeychain\n"), vec!["osxkeychain"]);
+        // Homebrew's Git: osxkeychain system-wide.
+        assert_eq!(effective_helpers("system\tosxkeychain\n"), vec!["osxkeychain"]);
+        // A helper chosen in Accounts: an empty value clears the others, then the chosen one.
+        assert_eq!(effective_helpers("unknown\tosxkeychain\nglobal\t\nglobal\tmanager\n"), vec!["manager"]);
+        // Git for Windows' manager, switched off globally with an empty value.
+        assert!(effective_helpers("system\tmanager\nglobal\t\n").is_empty());
+        // A repository's own setting does not count for the Accounts dialog.
+        assert_eq!(effective_helpers("system\tosxkeychain\nlocal\tstore\n"), vec!["osxkeychain"]);
+        assert_eq!(effective_helpers("global\t\nglobal\tcache --timeout=600\n"), vec!["cache --timeout=600"]);
+        // An old Git that does not know --show-scope prints an error: no helper read.
+        assert!(effective_helpers("error: unknown option `show-scope'\n").is_empty());
+    }
+
+    #[test]
+    fn a_configured_helper_is_found_by_its_name() {
+        let pos = |v: &str| HELPERS.iter().position(|h| h.0 == v);
+        assert_eq!(helper_index("/usr/local/share/gcm-core/git-credential-manager"), pos("manager"));
+        assert_eq!(helper_index("store --file ~/.my-credentials"), pos("store"));
+        assert_eq!(helper_index(""), pos(""));
+        assert_eq!(helper_index("libsecret"), None);
+        #[cfg(target_os = "macos")]
+        assert_eq!(helper_index("osxkeychain"), pos("osxkeychain"));
     }
 }

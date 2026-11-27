@@ -10,7 +10,7 @@ available as a button or dialog, and YAGUI always shows which command it runs an
   stage, unstage or discard single hunks
 - Diffs in one column or side by side, with a toolbar for ignoring whitespace, showing
   invisible characters, word wrap, more or fewer lines around each change and the entire file
-- All Git commands in a searchable, explained command view and in Quick Launch (Ctrl+P)
+- All Git commands in a searchable, explained command view and in Quick Launch (Ctrl+P, on macOS ⌘P)
 - Repository Manager, workspaces, tab list, statistics and treemap
 - Branch, tag, stash, remote, rebase (interactive), cherry-pick, bisect, worktrees, submodules,
   Git Flow and Git LFS
@@ -26,11 +26,12 @@ Download the file for your computer from the
 |---|---|---|
 | Windows | `YAGUI-Setup-<version>-windows-x64.exe` | Run it and click Install (no administrator rights). Uninstall via Settings > Apps or Help > Uninstall YAGUI. |
 | Windows (portable) | `yagui-<version>-windows-x64.exe` | Run it from anywhere. |
-| macOS | `YAGUI-<version>-macos-universal.dmg` | Drag YAGUI into Applications. Not notarized: macOS blocks the first start; then click "Open Anyway" in System Settings > Privacy & Security (macOS 14 and older: right-click > Open). |
+| macOS | `YAGUI-<version>-macos-universal.dmg` | Drag YAGUI into Applications, or start it right from the disk image or any other folder. Not notarized: macOS blocks the first start; then click "Open Anyway" in System Settings > Privacy & Security within about an hour and confirm with your login password (macOS 14 and older: right-click > Open). |
 | Debian/Ubuntu | `yagui_<version>_amd64.deb` | `sudo apt install ./yagui_<version>_amd64.deb` |
 | Other Linux | `yagui-<version>-linux-x64.tar.gz` | Unpack, then `./yagui --install` (adds a menu entry and the `yagui` command). |
 
-Git must be installed. On Linux YAGUI needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and
+Git must be installed; on macOS Apple's Command Line Tools (`xcode-select --install`) or Git from
+Homebrew or MacPorts. On Linux YAGUI needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and
 newer). Command line options: `yagui --help`.
 
 ## Updates
@@ -39,7 +40,7 @@ YAGUI looks for a new release once a day (Help > Check for Updates; can be turne
 "Download and install" replaces the program and restarts it. For a private repository, sign in
 to GitHub under File > Accounts so YAGUI may read the releases. Installed from the .deb (or in a
 folder you may not write to), YAGUI points to the release page instead: install the new package
-from there.
+from there. The same goes for YAGUI started from the macOS disk image, which is read-only.
 
 ## Versions and releases
 

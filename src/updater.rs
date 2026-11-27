@@ -8,6 +8,8 @@
 //!   Windows, `yagui-<version>-<platform>.tar.gz` (holding the `yagui` program) elsewhere.
 //! - Installing replaces the running program: it is renamed to `*.old` (allowed while it runs),
 //!   the new one takes its place, YAGUI restarts and removes the old file on the next start.
+//!   On macOS the old file goes right away, and YAGUI.app gets the new version in its Info.plist
+//!   and is signed again (ad hoc), so the app's signature covers the new program.
 //!   That needs a program folder this user may write to; a package (`/usr/bin/yagui` from the
 //!   .deb) or a read-only folder gets the release page instead (`self_update_blocker`).
 
@@ -47,6 +49,11 @@ impl Release {
     }
 }
 
+/// macOS: the system's own tools by full path, since YAGUI puts Homebrew's and MacPorts'
+/// folders in front of PATH at start (main.rs) and the update must not depend on what is there.
+const CURL: &str = if cfg!(target_os = "macos") { "/usr/bin/curl" } else { "curl" };
+const TAR: &str = if cfg!(target_os = "macos") { "/usr/bin/tar" } else { "tar" };
+
 fn no_window(c: &mut Command) {
     #[cfg(windows)]
     {
@@ -70,7 +77,7 @@ fn github_token() -> Option<String> {
 /// Runs curl with GitHub headers (and the token on standard input). Returns (status, body).
 fn curl(url: &str, accept: &str, out_file: Option<&Path>) -> Result<(u32, Vec<u8>), String> {
     let token = github_token();
-    let mut c = Command::new("curl");
+    let mut c = Command::new(CURL);
     c.args(["-sS", "-L", "--max-time", "600", "-H", &format!("Accept: {accept}"), "-H", "User-Agent: YAGUI-updater", "-H", "X-GitHub-Api-Version: 2022-11-28", "-w", "\n%{http_code}"]);
     if token.is_some() {
         c.args(["-H", "@-"]);
@@ -251,13 +258,14 @@ pub fn download(a: &Asset) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
-/// Puts the downloaded program in place of the running one.
-pub fn install(downloaded: &Path) -> Result<PathBuf, String> {
+/// Puts the downloaded program in place of the running one. `version` is the release's version,
+/// which the app's Info.plist gets on macOS.
+pub fn install(downloaded: &Path, version: &str) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let new_bin = if downloaded.extension().map(|e| e == "gz").unwrap_or(false) {
         let dir = downloaded.with_extension("").with_extension("");
         let _ = std::fs::create_dir_all(&dir);
-        let st = Command::new("tar").arg("-xzf").arg(downloaded).arg("-C").arg(&dir).status().map_err(|e| e.to_string())?;
+        let st = Command::new(TAR).arg("-xzf").arg(downloaded).arg("-C").arg(&dir).status().map_err(|e| e.to_string())?;
         if !st.success() {
             return Err("could not unpack the update".into());
         }
@@ -277,7 +285,48 @@ pub fn install(downloaded: &Path) -> Result<PathBuf, String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755));
     }
+    #[cfg(target_os = "macos")]
+    {
+        // The running program keeps its own copy, and nothing may stay inside the app that its
+        // signature does not cover.
+        let _ = std::fs::remove_file(&old);
+        if let Some(app) = app_bundle(&exe) {
+            let _ = refresh_app(&app, version);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = version;
     Ok(exe)
+}
+
+/// `…/YAGUI.app` when `exe` is `…/YAGUI.app/Contents/MacOS/<program>`.
+#[cfg(any(target_os = "macos", test))]
+fn app_bundle(exe: &Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    let is_app = macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && app.extension()? == "app";
+    is_app.then(|| app.to_path_buf())
+}
+
+/// After the program inside YAGUI.app was replaced, the app's version and its (ad-hoc) signature
+/// have to fit the new program again: otherwise `codesign --verify` fails and a copy taken to
+/// another Mac counts as damaged. plutil and codesign come with macOS (signing needs the Command
+/// Line Tools only on macOS 11). If they fail, the app keeps the state the replacement left: it
+/// still starts. Returns whether the app's signature checks out afterwards.
+#[cfg(target_os = "macos")]
+fn refresh_app(app: &Path, version: &str) -> bool {
+    let plist = app.join("Contents/Info.plist");
+    if !version.is_empty() {
+        // The same keys packaging/macos/Info.plist fills in with the version.
+        let info = format!("YAGUI {version} - Yet Another Git User Interface");
+        for (key, value) in [("CFBundleShortVersionString", version), ("CFBundleVersion", version), ("CFBundleGetInfoString", info.as_str())] {
+            let _ = Command::new("/usr/bin/plutil").args(["-replace", key, "-string", value]).arg(&plist).output();
+        }
+    }
+    let ok = |args: &[&str]| Command::new("/usr/bin/codesign").args(args).arg(app).output().map(|o| o.status.success()).unwrap_or(false);
+    // One executable, nothing nested: no --deep (deprecated for signing).
+    ok(&["--force", "--sign", "-"]) && ok(&["--verify", "--strict"])
 }
 
 fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -303,14 +352,39 @@ fn old_path(exe: &Path) -> PathBuf {
 /// Removes what the previous update left behind (call at start).
 pub fn cleanup() {
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(old_path(&exe));
+        let old = old_path(&exe);
+        let updated = old.exists();
+        let _ = std::fs::remove_file(&old);
+        // YAGUI 1.1.0 and older replaced the program inside YAGUI.app without signing the app
+        // again; such an update leaves the old program behind, so this start is the first one
+        // after it. Repair the app in the background (codesign takes a moment).
+        #[cfg(target_os = "macos")]
+        if updated {
+            if let Some(app) = app_bundle(&exe) {
+                std::thread::spawn(move || refresh_app(&app, version::VERSION));
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = updated;
     }
 }
 
-/// Starts the (new) program again; the caller then closes this window.
+/// Starts the (new) program again; the caller then closes this window. On macOS an app that
+/// Finder, the Dock or `open` started (its parent is launchd) is started the same way again
+/// (`open -n`), so it does not run as a child of this one; started from a shell, it is spawned
+/// directly and keeps that shell's environment and folder.
 pub fn restart() {
     if let Ok(exe) = std::env::current_exe() {
         let args: Vec<String> = std::env::args().skip(1).collect();
+        #[cfg(target_os = "macos")]
+        if std::os::unix::process::parent_id() == 1 {
+            if let Some(app) = app_bundle(&exe) {
+                let opened = Command::new("/usr/bin/open").arg("-n").arg(&app).arg("--args").args(&args).status().map(|s| s.success()).unwrap_or(false);
+                if opened {
+                    return;
+                }
+            }
+        }
         let _ = Command::new(exe).args(args).spawn();
     }
 }
@@ -326,6 +400,14 @@ mod tests {
         assert_eq!(e, CheckErr::NoAccess(404));
         assert!(e.sign_in_helps());
         assert!(!CheckErr::Refused(429).sign_in_helps());
+    }
+
+    #[test]
+    fn the_app_bundle_is_found_only_around_contents_macos() {
+        assert_eq!(app_bundle(Path::new("/Applications/YAGUI.app/Contents/MacOS/yagui")), Some(PathBuf::from("/Applications/YAGUI.app")));
+        assert_eq!(app_bundle(Path::new("/Users/me/Downloads/yagui")), None);
+        assert_eq!(app_bundle(Path::new("/opt/YAGUI.app/MacOS/yagui")), None);
+        assert_eq!(app_bundle(Path::new("/opt/YAGUI/Contents/MacOS/yagui")), None);
     }
 
     #[test]

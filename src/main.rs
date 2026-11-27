@@ -25,6 +25,70 @@ fn attach_console() {
     }
 }
 
+/// Apps started from Finder or the Dock get only `/usr/bin:/bin:/usr/sbin:/sbin`, so Git from
+/// Homebrew or MacPorts (and git-lfs, git-flow) would not be found. Adds their folders that exist
+/// and are missing, right before the system folders, as a login shell has them; folders the user
+/// put first stay first.
+#[cfg(target_os = "macos")]
+fn extend_path() {
+    let current: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    if let Some(dirs) = extended_path(current, |d| d.is_dir()) {
+        if let Ok(joined) = std::env::join_paths(dirs) {
+            // SAFETY: called first thing in main, before any other thread exists.
+            unsafe { std::env::set_var("PATH", joined) };
+        }
+    }
+}
+
+/// PATH's folders with the Homebrew and MacPorts folders that exist added; None if none is
+/// missing (then PATH stays as it is, also an unset one).
+#[cfg(any(target_os = "macos", test))]
+fn extended_path(current: Vec<PathBuf>, is_dir: impl Fn(&std::path::Path) -> bool) -> Option<Vec<PathBuf>> {
+    const SYSTEM: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+    // Empty entries would mean the current folder; no PATH at all means launchd's.
+    let mut dirs: Vec<PathBuf> = current.into_iter().filter(|d| !d.as_os_str().is_empty()).collect();
+    if dirs.is_empty() {
+        dirs = SYSTEM.iter().map(PathBuf::from).collect();
+    }
+    let extra: Vec<PathBuf> = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
+        .iter()
+        .map(PathBuf::from)
+        .filter(|d| is_dir(d) && !dirs.contains(d))
+        .collect();
+    if extra.is_empty() {
+        return None;
+    }
+    let at = dirs.iter().position(|d| SYSTEM.iter().any(|s| d.as_path() == std::path::Path::new(s))).unwrap_or(0);
+    dirs.splice(at..at, extra);
+    Some(dirs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths(v: &[&str]) -> Vec<PathBuf> {
+        v.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn homebrew_and_macports_folders_go_right_before_the_system_folders() {
+        let all = |_: &std::path::Path| true;
+        let brew = |d: &std::path::Path| d == std::path::Path::new("/opt/homebrew/bin");
+        // Finder's PATH.
+        assert_eq!(extended_path(paths(&["/usr/bin", "/bin", "/usr/sbin", "/sbin"]), brew), Some(paths(&["/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])));
+        // The user's own folders stay first; folders already there are not added twice.
+        assert_eq!(
+            extended_path(paths(&["/Users/me/bin", "/usr/local/bin", "/usr/bin", "/bin"]), all),
+            Some(paths(&["/Users/me/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/local/bin", "/usr/bin", "/bin"]))
+        );
+        assert_eq!(extended_path(paths(&["/opt/homebrew/bin", "/usr/bin"]), brew), None);
+        // No PATH, or an empty one: launchd's folders, without an empty entry.
+        assert_eq!(extended_path(vec![], brew), Some(paths(&["/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])));
+        assert_eq!(extended_path(paths(&[""]), |_: &std::path::Path| false), None);
+    }
+}
+
 const HELP: &str = "YAGUI - Yet Another Git User Interface
 
 Usage: yagui [folder] [options]
@@ -42,6 +106,8 @@ Usage: yagui [folder] [options]
 ";
 
 fn main() -> eframe::Result<()> {
+    #[cfg(target_os = "macos")]
+    extend_path();
     let mut screenshot: Option<PathBuf> = None;
     let mut repo: Option<PathBuf> = None;
     let all: Vec<String> = std::env::args().skip(1).collect();
